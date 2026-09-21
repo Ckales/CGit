@@ -94,6 +94,8 @@ CGit 的本地读取主要使用 [gitoxide](https://github.com/GitoxideLabs/gito
 
 因此，CGit 不单独保存远端仓库密码。
 
+对于 HTTPS 远端，可以在“设置 → Git 信息 → 远程认证”查看 Git 当前解析到的账号、切换用户名和 Personal Access Token，并用 dry-run 测试真实推送权限。Token 通过 Git credential helper 写入系统钥匙串，不会进入 CGit 的应用配置。
+
 ## 配置与隐私
 
 界面偏好、最近仓库路径和可选 AI 配置保存在应用 WebView 的 `localStorage` 中，不在项目仓库内：

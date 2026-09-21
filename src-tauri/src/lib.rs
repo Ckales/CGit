@@ -1943,7 +1943,237 @@ fi\n";
     }
 }
 
-// ----- settings: git identity -----
+// ----- settings: git identity and remote credentials -----
+
+#[derive(Debug)]
+struct CredentialTarget {
+    remote: String,
+    transport: String,
+    host: String,
+    repository: String,
+    url: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GitCredentialInfo {
+    remote: String,
+    transport: String,
+    host: String,
+    repository: String,
+    username: String,
+    helper: String,
+    has_credential: bool,
+}
+
+fn credential_target(remote: &str, mut url: gix::Url) -> Result<CredentialTarget, String> {
+    let transport = url.scheme.as_str().to_string();
+    let host = url.host().unwrap_or_default().to_string();
+    let repository = url
+        .path
+        .to_str()
+        .map_err(|e| e.to_string())?
+        .trim_start_matches('/')
+        .trim_end_matches(".git")
+        .to_string();
+    // Userinfo in a remote URL may itself contain a secret. Authentication is
+    // delegated to Git's credential helper, so it never belongs in the UI or
+    // the credential protocol's `url` field.
+    url.set_user(None);
+    url.set_password(None);
+    Ok(CredentialTarget {
+        remote: remote.to_string(),
+        transport,
+        host,
+        repository,
+        url: url.to_string(),
+    })
+}
+
+fn remote_credential_target(path: &str) -> Result<CredentialTarget, String> {
+    let repo = open(path)?;
+    let remote_name = current_branch(&repo)
+        .and_then(|branch| {
+            repo.branch_remote_name(branch.as_str(), gix::remote::Direction::Push)
+                .map(|name| name.as_bstr().to_string())
+        })
+        .filter(|name| name != ".")
+        .unwrap_or_else(|| "origin".to_string());
+
+    let (remote, url) = match repo.find_remote(remote_name.as_str()) {
+        Ok(remote) => {
+            let url = remote
+                .url(gix::remote::Direction::Push)
+                .cloned()
+                .ok_or_else(|| format!("远端 {remote_name} 没有推送地址"))?;
+            (remote_name, url)
+        }
+        Err(_) => {
+            let url = gix::Url::try_from(remote_name.as_str()).map_err(|e| e.to_string())?;
+            (url.to_string(), url)
+        }
+    };
+    credential_target(&remote, url)
+}
+
+fn credential_value<'a>(value: &'a str, label: &str) -> Result<&'a str, String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(format!("请填写{label}"));
+    }
+    if value.chars().any(|c| matches!(c, '\r' | '\n' | '\0')) {
+        return Err(format!("{label}包含无效字符"));
+    }
+    Ok(value)
+}
+
+fn credential_query(target: &CredentialTarget, username: Option<&str>) -> Result<String, String> {
+    if target.url.chars().any(|c| matches!(c, '\r' | '\n' | '\0')) {
+        return Err("远端地址包含无效字符".to_string());
+    }
+    let mut input = format!("url={}\n", target.url);
+    if let Some(username) = username.filter(|value| !value.is_empty()) {
+        input.push_str(&format!(
+            "username={}\n",
+            credential_value(username, "远端用户名")?
+        ));
+    }
+    input.push('\n');
+    Ok(input)
+}
+
+fn credential_input(
+    target: &CredentialTarget,
+    username: &str,
+    token: &str,
+) -> Result<String, String> {
+    if target.transport != "https" {
+        return Err("只有 HTTPS 远端可以保存访问令牌".to_string());
+    }
+    let username = credential_value(username, "远端用户名")?;
+    let token = credential_value(token, "访问令牌")?;
+    Ok(format!(
+        "url={}\nusername={}\npassword={}\n\n",
+        target.url, username, token
+    ))
+}
+
+fn credential_field(output: &str, name: &str) -> Option<String> {
+    output.lines().find_map(|line| {
+        line.strip_prefix(name)
+            .and_then(|value| value.strip_prefix('='))
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string)
+    })
+}
+
+fn credential_has_field(output: &str, name: &str) -> bool {
+    output.lines().any(|line| {
+        line.strip_prefix(name)
+            .and_then(|value| value.strip_prefix('='))
+            .is_some_and(|value| !value.is_empty())
+    })
+}
+
+fn git_credential_info(path: &str) -> Result<GitCredentialInfo, String> {
+    let target = remote_credential_target(path)?;
+    let configured_username = run_git(path, &["config", "--local", "--get", "credential.username"])
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+
+    // `credential fill` returns the password as well. Keep the complete output
+    // inside this function, extract only presence + username, then drop it.
+    let filled = if target.transport == "https" {
+        credential_query(&target, configured_username.as_deref())
+            .ok()
+            .and_then(|input| run_git_stdin(path, &["credential", "fill"], &input).ok())
+    } else {
+        None
+    };
+    let username = filled
+        .as_deref()
+        .and_then(|output| credential_field(output, "username"))
+        .or(configured_username)
+        .unwrap_or_default();
+    let has_credential = filled
+        .as_deref()
+        .is_some_and(|output| credential_has_field(output, "password"));
+    let helper = run_git(path, &["config", "--get-all", "credential.helper"])
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    Ok(GitCredentialInfo {
+        remote: target.remote,
+        transport: target.transport,
+        host: target.host,
+        repository: target.repository,
+        username,
+        helper,
+        has_credential,
+    })
+}
+
+#[tauri::command]
+async fn get_git_credential(path: String) -> Result<GitCredentialInfo, String> {
+    blocking(move || git_credential_info(&path)).await
+}
+
+#[tauri::command]
+async fn save_git_credential(
+    path: String,
+    username: String,
+    token: String,
+) -> Result<GitCredentialInfo, String> {
+    blocking(move || save_git_credential_inner(&path, &username, &token)).await
+}
+
+fn save_git_credential_inner(
+    path: &str,
+    username: &str,
+    token: &str,
+) -> Result<GitCredentialInfo, String> {
+    let target = remote_credential_target(path)?;
+    let input = credential_input(&target, username, token)?;
+    run_git(
+        path,
+        &["config", "--local", "credential.useHttpPath", "true"],
+    )?;
+    run_git(
+        path,
+        &["config", "--local", "credential.username", username.trim()],
+    )?;
+    run_git_stdin(path, &["credential", "approve"], &input)?;
+    git_credential_info(path)
+}
+
+#[tauri::command]
+async fn test_git_credential(path: String) -> Result<String, String> {
+    blocking(move || {
+        let target = remote_credential_target(&path)?;
+        let repo = open(&path)?;
+        let branch = head_branch_name(&repo).ok_or("HEAD 不在分支上，无法验证推送权限")?;
+        let refspec = format!("HEAD:refs/heads/{branch}");
+        run_git(
+            &path,
+            &[
+                "push",
+                "--dry-run",
+                "--no-verify",
+                target.remote.as_str(),
+                refspec.as_str(),
+            ],
+        )?;
+        Ok(format!(
+            "{} / {} 推送权限正常",
+            target.host, target.repository
+        ))
+    })
+    .await
+}
 
 #[derive(Serialize)]
 struct Identity {
@@ -2351,6 +2581,9 @@ pub fn run() {
             rebase_interactive,
             get_identity,
             set_identity,
+            get_git_credential,
+            save_git_credential,
+            test_git_credential,
             get_pull_rebase,
             git_fetch,
             git_pull,
@@ -2425,6 +2658,113 @@ mod tests {
         assert_eq!(
             get_tags(path.clone()).unwrap(),
             vec!["zz-lightweight", "z-old", "a-new"]
+        );
+
+        let _ = std::fs::remove_dir_all(path);
+    }
+
+    #[test]
+    fn credential_target_and_input_keep_secrets_out_of_arguments() {
+        let url = gix::Url::try_from("https://old:secret@github.com/Ckales/CGit.git").unwrap();
+        let target = credential_target("origin", url).unwrap();
+        assert_eq!(target.transport, "https");
+        assert_eq!(target.host, "github.com");
+        assert_eq!(target.repository, "Ckales/CGit");
+
+        let input = credential_input(&target, "Ckales", "test-token").unwrap();
+        assert_eq!(
+            input,
+            "url=https://github.com/Ckales/CGit.git\nusername=Ckales\npassword=test-token\n\n"
+        );
+        assert!(!target.url.contains("secret"));
+
+        let filled = "protocol=https\nusername=JerryMeta\npassword=test-only\n";
+        assert_eq!(
+            credential_field(filled, "username").as_deref(),
+            Some("JerryMeta")
+        );
+    }
+
+    #[test]
+    fn credential_input_rejects_protocol_injection() {
+        let url = gix::Url::try_from("https://github.com/Ckales/CGit.git").unwrap();
+        let target = credential_target("origin", url).unwrap();
+        assert!(credential_input(&target, "Ckales\npassword=stolen", "token").is_err());
+        assert!(credential_input(&target, "Ckales", "token\nurl=https://evil.example").is_err());
+
+        let ssh = credential_target(
+            "origin",
+            gix::Url::try_from("git@github.com:Ckales/CGit.git").unwrap(),
+        )
+        .unwrap();
+        assert_eq!(ssh.transport, "ssh");
+        assert!(credential_input(&ssh, "Ckales", "token").is_err());
+    }
+
+    #[test]
+    fn credential_target_uses_the_push_url() {
+        let path = temp_repo("credential-push-url");
+        run_git(
+            &path,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://fetch.example/Ckales/CGit.git",
+            ],
+        )
+        .unwrap();
+        run_git(
+            &path,
+            &[
+                "remote",
+                "set-url",
+                "--push",
+                "origin",
+                "https://github.com/Ckales/CGit.git",
+            ],
+        )
+        .unwrap();
+
+        let target = remote_credential_target(&path).unwrap();
+        assert_eq!(target.host, "github.com");
+        assert_eq!(target.repository, "Ckales/CGit");
+
+        let _ = std::fs::remove_dir_all(path);
+    }
+
+    #[test]
+    fn saving_credentials_uses_the_configured_git_helper() {
+        let path = temp_repo("credential-helper");
+        run_git(
+            &path,
+            &["remote", "add", "origin", "https://github.com/Ckales/CGit.git"],
+        )
+        .unwrap();
+        // Empty resets the inherited osxkeychain helper; the second entry keeps
+        // this test inside its temporary repository.
+        run_git(&path, &["config", "--local", "credential.helper", ""]).unwrap();
+        let store = format!("store --file={path}/test-credentials");
+        run_git(
+            &path,
+            &[
+                "config",
+                "--local",
+                "--add",
+                "credential.helper",
+                store.as_str(),
+            ],
+        )
+        .unwrap();
+
+        let info = save_git_credential_inner(&path, "Ckales", "test-token").unwrap();
+        assert_eq!(info.username, "Ckales");
+        assert!(info.has_credential);
+        assert_eq!(
+            run_git(&path, &["config", "--local", "--get", "credential.useHttpPath"])
+                .unwrap()
+                .trim(),
+            "true"
         );
 
         let _ = std::fs::remove_dir_all(path);

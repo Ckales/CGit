@@ -396,17 +396,36 @@ export function isPushRejected(stderr) {
   return s.includes("[rejected]") || s.includes("fetch first") || s.includes("non-fast-forward");
 }
 
-/* 凭证失效时 git 的几种说法：前两条来自 HTTPS 取不到用户名 / 密码，
-   Authentication failed 来自远端拒绝，publickey 来自 SSH。这类错误 cgit 修不了
-   （它没有凭证输入界面），只能提示用户去外面重新登录，不像 isPushRejected 那样自动重试。 */
-export function isAuthFailure(stderr) {
+/** Classify credential failures and retain the authenticated GitHub account
+ * when the remote names it. An HTTP 403 alone is not enough: repositories and
+ * proxies use it for failures unrelated to credentials. */
+export function authFailureInfo(stderr) {
   const s = String(stderr);
-  return (
-    s.includes("could not read Username") ||
-    s.includes("could not read Password") ||
-    s.includes("Authentication failed") ||
-    s.includes("Permission denied (publickey)")
-  );
+  const denied = /^remote: Permission to .+ denied to ([A-Za-z0-9-]+)\.\s*$/m.exec(s);
+  if (denied && s.includes("The requested URL returned error: 403")) {
+    return { kind: "github-403", username: denied[1] };
+  }
+  if (s.includes("could not read Username") || s.includes("could not read Password")) {
+    return { kind: "https-prompt", username: null };
+  }
+  if (s.includes("Authentication failed")) return { kind: "https-auth", username: null };
+  if (s.includes("Permission denied (publickey)")) {
+    return { kind: "ssh-publickey", username: null };
+  }
+  return null;
+}
+
+export const isAuthFailure = (stderr) => authFailureInfo(stderr) !== null;
+
+/** Decide whether the combined credential button can reuse the current helper
+ * entry or needs a new token. The token itself stays in the input element. */
+export function credentialAction(info, username, token) {
+  username = String(username).trim();
+  token = String(token).trim();
+  if (!username) return "missing-username";
+  if (token) return "save-and-test";
+  if (info?.hasCredential && username === info.username) return "test";
+  return "missing-token";
 }
 
 /* ---------- folder tree (push dialog) ---------- */

@@ -13,7 +13,9 @@ import {
   aiEndpoint,
   nextChangeTarget,
   isPushRejected,
+  authFailureInfo,
   isAuthFailure,
+  credentialAction,
   pathTree,
 } from "../src/git-text.js";
 
@@ -378,6 +380,27 @@ test("isAuthFailure: 识别 git 报凭证问题的几种说法", () => {
   assert.equal(isAuthFailure("fatal: could not read Password for 'https://u@example.com'"), true);
   assert.equal(isAuthFailure("fatal: Authentication failed for 'https://example.com/repo'"), true);
   assert.equal(isAuthFailure("git@example.com: Permission denied (publickey)."), true);
+});
+
+test("authFailureInfo: GitHub 403 返回实际认证账号", () => {
+  const denied = [
+    "remote: Permission to Ckales/CGit.git denied to JerryMeta.",
+    "fatal: unable to access 'https://github.com/Ckales/CGit.git/': The requested URL returned error: 403",
+  ].join("\n");
+  assert.deepEqual(authFailureInfo(denied), { kind: "github-403", username: "JerryMeta" });
+  assert.equal(isAuthFailure(denied), true);
+});
+
+test("authFailureInfo: 普通远端 403 不能冒充账号认证错误", () => {
+  assert.equal(authFailureInfo("fatal: unable to access 'https://example.com/': error 403"), null);
+});
+
+test("credentialAction: 有新令牌先保存，否则复用同账号凭据测试", () => {
+  const current = { username: "Ckales", hasCredential: true };
+  assert.equal(credentialAction(current, "Ckales", "new-token"), "save-and-test");
+  assert.equal(credentialAction(current, "Ckales", ""), "test");
+  assert.equal(credentialAction(current, "Another", ""), "missing-token");
+  assert.equal(credentialAction(current, "", ""), "missing-username");
 });
 
 test("isAuthFailure: 其他失败不应被当成凭证问题", () => {

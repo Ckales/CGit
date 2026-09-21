@@ -15,7 +15,9 @@ import {
   layoutGraph,
   aiEndpoint,
   isPushRejected,
+  authFailureInfo,
   isAuthFailure,
+  credentialAction,
   pathTree,
 } from "./git-text.js";
 
@@ -2019,7 +2021,9 @@ async function backgroundFetch() {
   // Bail if the user switched projects while the fetch was in flight.
   if (repos !== mine) return;
   await refreshAll();
-  if (authFailed.length) setStatus(`${authFailed.join("、")} 凭证已失效，请重新登录`, true);
+  if (authFailed.length) {
+    setStatus(`${authFailed.join("、")} 远程认证失败，请到设置 → Git 信息 → 远程认证检查凭据`, true);
+  }
 }
 
 /* Asked only when nothing else can answer — see `updateMethodFor`. */
@@ -2095,7 +2099,11 @@ async function updateMethodFor(r) {
    其余错误保持原样 —— git 自己说得比我们清楚。 */
 function netErrorText(e) {
   const text = String(e).trim();
-  return isAuthFailure(text) ? `凭证已失效，请重新登录 — ${text}` : text;
+  const auth = authFailureInfo(text);
+  if (auth?.kind === "github-403") {
+    return `GitHub 当前使用账号 ${auth.username}，没有该仓库的推送权限。请到设置 → Git 信息 → 远程认证切换账号 — ${text}`;
+  }
+  return auth ? `远程认证失败，请到设置 → Git 信息 → 远程认证检查凭据 — ${text}` : text;
 }
 
 /* Push, and treat "the remote moved ahead" as something to resolve rather
@@ -3346,6 +3354,13 @@ async function openSettings() {
     form.appendChild(p);
   };
 
+  const sectionTitle = (form, text) => {
+    const title = document.createElement("div");
+    title.className = "settings-section-title";
+    title.textContent = text;
+    form.appendChild(title);
+  };
+
   const mkInput = (value, placeholder = "", type = "text") => {
     const i = document.createElement("input");
     i.type = type;
@@ -3470,6 +3485,7 @@ async function openSettings() {
 
   /* ----- Git 信息（read from the open repo） ----- */
   const gitPane = addPane("Git 信息");
+  sectionTitle(gitPane, "提交身份");
   let ident = { name: "", email: "" };
   if (repoPath) {
     try {
@@ -3483,7 +3499,112 @@ async function openSettings() {
   const globalEl = document.createElement("input");
   globalEl.type = "checkbox";
   field(gitPane, "写入全局配置 (--global)", globalEl);
-  if (!repoPath) hint(gitPane, "当前没有打开仓库，身份信息不会被写入。");
+  if (!repoPath) {
+    hint(gitPane, "当前没有打开仓库，身份信息不会被写入。");
+  }
+
+  sectionTitle(gitPane, "远程认证");
+  if (!repoPath) {
+    hint(gitPane, "打开仓库后可查看和切换当前仓库的远程认证账号。");
+  } else {
+    let auth = null;
+    try {
+      auth = await invoke("get_git_credential", { path: repoPath });
+    } catch (e) {
+      hint(gitPane, `读取远程认证失败：${e}`);
+    }
+
+    if (auth) {
+      const remoteValue = document.createElement("span");
+      remoteValue.className = "settings-value";
+      remoteValue.textContent = `${auth.remote} · ${auth.host}/${auth.repository}`;
+      field(gitPane, "推送远端", remoteValue);
+
+      if (auth.transport === "https") {
+        const currentValue = document.createElement("span");
+        currentValue.className = "settings-value";
+        const renderCurrentCredential = (info) => {
+          const helper = info.helper ? ` · ${info.helper}` : "";
+          currentValue.textContent = info.hasCredential
+            ? `${info.username || "未知账号"}${helper}`
+            : `${info.username || "未找到凭据"}${helper}`;
+        };
+        renderCurrentCredential(auth);
+        field(gitPane, "Git 当前凭据", currentValue);
+
+        const remoteUserEl = field(
+          gitPane,
+          "远端用户名",
+          mkInput(auth.username, "例如 Ckales"),
+        );
+        const remoteTokenEl = field(
+          gitPane,
+          "访问令牌 (PAT)",
+          mkInput("", auth.hasCredential ? "••••••••" : "请输入 Personal Access Token", "password"),
+        );
+        remoteTokenEl.autocomplete = "new-password";
+        hint(
+          gitPane,
+          "新令牌通过 Git credential helper 写入系统钥匙串，CGit 不保存；不修改凭据时可留空并直接测试。",
+        );
+
+        const authRow = document.createElement("div");
+        authRow.className = "settings-test";
+        const credentialBtn = document.createElement("button");
+        credentialBtn.type = "button";
+        credentialBtn.textContent = "保存凭据并测试";
+        const credentialResult = document.createElement("span");
+        credentialResult.className = "test-result";
+        authRow.append(credentialBtn, credentialResult);
+        gitPane.appendChild(authRow);
+
+        credentialBtn.onclick = async () => {
+          const username = remoteUserEl.value.trim();
+          const token = remoteTokenEl.value.trim();
+          const action = credentialAction(auth, username, token);
+          if (action === "missing-username" || action === "missing-token") {
+            credentialResult.className = "test-result bad";
+            credentialResult.textContent = action === "missing-username"
+              ? "请填写远端用户名"
+              : "切换账号时请填写访问令牌";
+            return;
+          }
+
+          credentialBtn.disabled = true;
+          credentialResult.className = "test-result";
+          try {
+            if (action === "save-and-test") {
+              credentialResult.textContent = "正在保存凭据…";
+              auth = await invoke("save_git_credential", {
+                path: repoPath,
+                username,
+                token,
+              });
+              renderCurrentCredential(auth);
+            }
+            credentialResult.textContent = "正在验证…";
+            credentialResult.textContent = await invoke("test_git_credential", { path: repoPath });
+            credentialResult.className = "test-result ok";
+          } catch (e) {
+            credentialResult.className = "test-result bad";
+            const failure = authFailureInfo(e);
+            credentialResult.textContent = failure?.kind === "github-403"
+              ? `当前账号 ${failure.username} 没有该仓库的推送权限，请切换账号`
+              : failure
+                ? "远程认证失败，请检查用户名和访问令牌"
+                : String(e).trim();
+          } finally {
+            remoteTokenEl.value = "";
+            credentialBtn.disabled = false;
+          }
+        };
+      } else if (auth.transport === "ssh") {
+        hint(gitPane, "当前远端使用 SSH，认证由系统 SSH Key 和 ~/.ssh/config 管理。");
+      } else {
+        hint(gitPane, `当前远端使用 ${auth.transport || "未知"} 协议，CGit 不保存该协议的凭据。`);
+      }
+    }
+  }
 
   /* ----- AI ----- */
   const aiPane = addPane("AI");

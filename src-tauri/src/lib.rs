@@ -702,6 +702,28 @@ fn parse_commit_lines(out: &str) -> Vec<CommitInfo> {
     v
 }
 
+fn parse_commit_messages(out: &str) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut messages = Vec::new();
+    for message in out.split('\0') {
+        let message = message.trim();
+        if !message.is_empty() && seen.insert(message.to_string()) {
+            messages.push(message.to_string());
+        }
+    }
+    messages
+}
+
+#[tauri::command]
+async fn get_commit_messages(path: String, limit: usize) -> Result<Vec<String>, String> {
+    blocking(move || {
+        let n = format!("-n{}", limit.clamp(1, 100));
+        let out = run_git(&path, &["log", n.as_str(), "--format=%B%x00"])?;
+        Ok(parse_commit_messages(&out))
+    })
+    .await
+}
+
 /// Flat (non-DAG) commit search across all refs. Message and author filters are
 /// AND-ed, which is what a filter bar means by having both boxes filled.
 #[tauri::command]
@@ -2591,6 +2613,7 @@ pub fn run() {
             get_repo_state,
             op_action,
             get_head_message,
+            get_commit_messages,
             search_commits,
             get_file_history,
             get_blame,
@@ -2621,6 +2644,19 @@ mod tests {
 
     fn event(path: &str) -> notify::Event {
         notify::Event::new(notify::EventKind::Any).add_path(std::path::PathBuf::from(path))
+    }
+
+    #[test]
+    fn commit_message_history_preserves_bodies_and_deduplicates_exact_matches() {
+        let out = "feat: newest\n\nbody line\0\nfeat: same subject\n\nbody one\0\nfeat: same subject\n\nbody two\0\nfeat: newest\n\nbody line\0\n\0\n";
+        assert_eq!(
+            parse_commit_messages(out),
+            vec![
+                "feat: newest\n\nbody line",
+                "feat: same subject\n\nbody one",
+                "feat: same subject\n\nbody two",
+            ]
+        );
     }
 
     #[test]

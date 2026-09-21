@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE.md)
 [![Platform: macOS](https://img.shields.io/badge/platform-macOS-lightgrey.svg)](#系统要求)
 
-CGit 是一个面向 macOS 的轻量 Git 桌面客户端，专注于日常提交、历史阅读、分支协作和冲突处理。界面使用原生 HTML/CSS/JavaScript，桌面能力由 Tauri 和 Rust 提供。
+JetBrains工具里git提交工具是最好用的Git工具，但是在AI时代，JetBrains工具显得过于笨重了，很多时候不会再频繁的打开JetBrains了，但是市面上没有一款Git工具是可以做到JetBrains这么优秀的（不愧是旧时代的王），于是我用AI写了一款效果能到达JetBrains Git 90%功能的Git GUI：CGit。界面使用原生 HTML/CSS/JavaScript，桌面能力由 Tauri 和 Rust 提供。
 
 > 当前为早期版本，仅支持 macOS，暂未提供签名和公证的官方安装包。
 

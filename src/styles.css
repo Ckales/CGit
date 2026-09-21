@@ -509,14 +509,14 @@ h3 {
   gap: 6px;
 }
 
-.ai-btn {
+.commit-tool-btn {
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 0 9px;
 }
 
-.ai-btn svg {
+.commit-tool-btn svg {
   width: 15px;
   height: 15px;
   display: block;

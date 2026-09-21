@@ -404,6 +404,9 @@ async function openRepoByPath(path) {
     undockCommitPanel();
     hideDiffArea();
     $("commit-msg").value = "";
+    $("author-input").value = "";
+    $("author-input").placeholder = "名字 <邮箱>";
+    commitIdentityGen++;
     $("amend-cb").checked = false;
     repos = ws.repos;
     repoPath = ws.repos[0].path;
@@ -415,6 +418,7 @@ async function openRepoByPath(path) {
       "push-btn",
       "commit-btn",
       "commit-more-btn",
+      "commit-history-btn",
       "ai-msg-btn",
       "open-project-btn",
       "open-project-menu-btn",
@@ -1899,7 +1903,7 @@ async function applyPatch(file, staged, header, body, okMsg, repo = repoPath) {
 /* Both commit buttons plus the AI one, so nothing can fire a second git write
    into the same repo while the first is still running. */
 function setCommitBusy(busy) {
-  for (const id of ["commit-btn", "commit-more-btn", "ai-msg-btn"]) {
+  for (const id of ["commit-btn", "commit-more-btn", "commit-history-btn", "ai-msg-btn"]) {
     $(id).disabled = busy;
   }
   $("commit-btn").classList.toggle("busy", busy);
@@ -1959,6 +1963,7 @@ async function doCommit(alsoPush = false) {
 
   if (done.length) {
     $("commit-msg").value = "";
+    $("author-input").value = "";
     $("amend-cb").checked = false;
     // Close on any success so the status bar is readable; a total failure keeps
     // the dialog up so the user can see which repo refused.
@@ -3751,6 +3756,26 @@ async function hasChanges(repo = null) {
   return results.some((r) => r.total > 0);
 }
 
+let commitIdentityGen = 0;
+
+async function refreshCommitIdentity(path) {
+  const gen = ++commitIdentityGen;
+  const input = $("author-input");
+  input.placeholder = "正在读取当前 Git 身份…";
+  try {
+    const identity = await invoke("get_identity", { path });
+    if (gen !== commitIdentityGen || path !== (commitScope || repoPath)) return;
+    const current = identity.name && identity.email
+      ? `${identity.name} <${identity.email}>`
+      : identity.name || identity.email || "未配置 Git 身份";
+    input.placeholder = current;
+    input.closest(".author-field").title = `当前仓库 Git 身份：${current}；填写后仅覆盖本次提交`;
+  } catch {
+    if (gen !== commitIdentityGen || path !== (commitScope || repoPath)) return;
+    input.placeholder = "未读取到 Git 身份";
+  }
+}
+
 async function openCommitDialog() {
   if (!repoPath) return;
   // Nothing staged or modified anywhere: the dialog would only have a "工作区
@@ -3762,6 +3787,7 @@ async function openCommitDialog() {
   undockCommitPanel(); // one panel, one place at a time
   $("commit-overlay").style.display = "flex";
   $("commit-body").appendChild(diffPane());
+  await refreshCommitIdentity(repoPath);
   // A diff left open in the main window would otherwise keep its half of the
   // window reserved with the pane no longer in it.
   document.documentElement.dataset.diffOpen = "0";
@@ -3793,7 +3819,7 @@ const commitPanel = () => document.querySelector(".commit-modal");
    list, stage-all, the AI message's diff, and the commit itself. */
 const inScope = (r) => !commitScope || r.repo.path === commitScope;
 
-function dockCommitPanel(path) {
+async function dockCommitPanel(path) {
   closeCommitDialog();
   // Drop whatever the diff pane was showing — clicking a repo replaces a
   // commit's detail rather than sitting beside it. Re-clicking the repo that
@@ -3804,7 +3830,7 @@ function dockCommitPanel(path) {
   $("commit-body").appendChild(diffPane());
   document.documentElement.dataset.diffOpen = "1";
   $("commit-panel-title").textContent = `提交 · ${repoName(path)}`;
-  return refreshChanges();
+  await Promise.all([refreshChanges(), refreshCommitIdentity(path)]);
 }
 
 function undockCommitPanel() {
@@ -4009,6 +4035,40 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
+async function showCommitMessageHistory(e) {
+  e.stopPropagation();
+  const rect = e.currentTarget.getBoundingClientRect();
+  const path = commitScope || repoPath;
+  if (!path) return;
+  let messages;
+  try {
+    messages = await invoke("get_commit_messages", { path, limit: 30 });
+  } catch (error) {
+    setStatus(String(error), true);
+    return;
+  }
+  if (!messages.length) {
+    notify("当前仓库没有历史提交说明");
+    return;
+  }
+
+  const items = [{ header: `历史提交说明 · ${repoName(path)}` }];
+  for (const message of messages) {
+    const lines = message.split("\n").map((line) => line.trim()).filter(Boolean);
+    const label = (lines[0] || message).slice(0, 80);
+    const sublabel = lines.slice(1).join(" ").slice(0, 120);
+    items.push({
+      label,
+      sublabel,
+      onClick: () => {
+        $("commit-msg").value = message;
+        $("commit-msg").focus();
+      },
+    });
+  }
+  showMenu(rect.left, rect.bottom + 4, items);
+}
+
 /* Amending replaces HEAD's message, so start from it rather than making the
    user retype it. Only when the box is empty — never clobber a draft. */
 $("amend-cb").onchange = async () => {
@@ -4069,6 +4129,7 @@ $("settings-btn").onclick = openSettings;
 $("new-branch-btn").onclick = () => newBranch();
 $("stash-btn").onclick = stashSave;
 $("commit-btn").onclick = () => doCommit(false);
+$("commit-history-btn").onclick = showCommitMessageHistory;
 $("ai-msg-btn").onclick = generateCommitMessage;
 $("commit-more-btn").onclick = (e) => {
   e.stopPropagation();

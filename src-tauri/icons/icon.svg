@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <!-- cgit app icon.
+
+       The artwork sits in the macOS icon grid rather than filling the canvas,
+       which is why a full-bleed icon reads a ring larger than every other app
+       in the Dock. The 0.8359375 below is 856/1024, measured off the icons it
+       sits next to rather than taken from the spec: Terminal, IntelliJ IDEA
+       and PhpStorm all put their artwork in exactly 214 of 256 px, and the
+       template's own 824/1024 (0.8047) came out visibly smaller than all
+       three. The geometry inside the transform is untouched, so the mark keeps
+       the proportions fitted from the original raster:
+
+       the glyph is shifted left 56.5 from where it was, so its bounding box is
+       centred on the canvas. Previously only the trunk line was centred, which
+       made the whole mark read as pushed to the right. Corner radius 103 was
+       recovered by least-squares fitting the original corner arc (fitted
+       102.8); reading it off an alpha threshold gives a badly low answer for a
+       radius this large.
+
+       Stroke 24 with node radius 43 (down from 32 / 51.5) — thinned one step,
+       which keeps the bbox centred (200−43 to 312+43 = 157 to 355) and is the
+       lightest weight where the branch line still survives the 16px icon:
+       rendered side by side, 20 / 39 already breaks up at that size. -->
+  <g transform="translate(42 42) scale(0.8359375)">
+    <rect width="512" height="512" rx="103" ry="103" fill="#FFFFFF"/>
+    <g fill="#000000" stroke="#000000" stroke-width="24" stroke-linecap="round">
+      <!-- trunk: top node down to the bottom node -->
+      <path d="M200 143.5 V 367.5"/>
+      <!-- branch: leaves the trunk at mid-height, out to the right node -->
+      <path d="M200 257 L 312 317.5"/>
+      <circle cx="200" cy="143.5" r="43" stroke="none"/>
+      <circle cx="200" cy="367.5" r="43" stroke="none"/>
+      <circle cx="312" cy="317.5" r="43" stroke="none"/>
+    </g>
+  </g>
+</svg>

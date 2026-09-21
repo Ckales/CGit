@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>cgit — Git 客户端</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header class="toolbar">
+        <span id="repo-label" class="repo-label">未打开仓库</span>
+        <div class="spacer"></div>
+        <button id="project-btn" class="project-pill" title="切换最近的项目">
+          <span id="project-name">未打开仓库</span>
+          <svg viewBox="0 0 10 6" aria-hidden="true">
+            <path
+              d="M1 1.25 L5 4.75 L9 1.25"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.4"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+        </button>
+        <button id="open-commit-btn" disabled title="提交 (⌘↵)">提交</button>
+        <button id="push-btn" disabled title="推送 (⌘P) — 右键可强制推送">推送</button>
+        <button id="pull-btn" disabled title="拉取 (⌘L)">拉取</button>
+        <button id="fetch-btn" disabled title="抓取 (⌘T)">抓取</button>
+        <button id="settings-btn" title="设置 (⌘,)">设置</button>
+        <div class="split-button">
+          <button id="open-project-btn" class="split-main" disabled title="用编辑器打开当前项目">
+            <img id="open-project-icon" alt="" hidden />
+            <span>打开项目</span>
+          </button>
+          <button
+            id="open-project-menu-btn"
+            class="split-arrow"
+            title="选择当前项目用哪个编辑器打开"
+            disabled
+          >
+            <svg viewBox="0 0 10 6" aria-hidden="true">
+              <path
+                d="M1 1.25 L5 4.75 L9 1.25"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.4"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <main class="layout">
+        <aside class="sidebar">
+          <div id="repos-section" style="display: none">
+            <h3>仓库</h3>
+            <ul id="repos" class="list"></ul>
+          </div>
+          <div class="section-head">
+            <h3>分支</h3>
+            <button id="new-branch-btn" class="icon-btn" title="新建分支">＋</button>
+          </div>
+          <ul id="branches" class="list"></ul>
+          <div class="section-head">
+            <h3>远端</h3>
+            <button id="add-remote-btn" class="icon-btn" title="添加远端">＋</button>
+          </div>
+          <ul id="remote-list" class="list"></ul>
+          <h3>远端分支</h3>
+          <ul id="remotes" class="list"></ul>
+          <div class="section-head">
+            <h3>标签</h3>
+            <button id="new-tag-btn" class="icon-btn" title="在 HEAD 上打标签">＋</button>
+          </div>
+          <ul id="tags" class="list"></ul>
+          <div class="section-head">
+            <h3>储藏</h3>
+            <button id="stash-btn" class="icon-btn" title="储藏当前改动">⤓</button>
+          </div>
+          <ul id="stash" class="list"></ul>
+        </aside>
+        <div
+          id="h-splitter"
+          class="splitter splitter-h"
+          title="左右拖动调整侧栏宽度（双击复位）"
+        ></div>
+
+        <div class="main-right">
+          <section class="history-panel">
+            <div class="section-head pane-head">
+              <h3>历史</h3>
+              <input id="log-search" class="filter-input" type="search" spellcheck="false"
+                     placeholder="搜索提交说明" />
+              <input id="log-author" class="filter-input" type="search" spellcheck="false"
+                     placeholder="作者" />
+            </div>
+            <ul id="log" class="list graph-list pane-scroll"></ul>
+          </section>
+
+          <div id="conflict-banner" class="conflict-banner" style="display: none"></div>
+
+          <div id="v-splitter" class="splitter" title="上下拖动调整历史区高度（双击复位）"></div>
+
+          <div class="work">
+
+            <section class="diff-pane">
+              <div class="section-head pane-head">
+                <button id="diff-back-btn" class="icon-btn" title="返回上一视图" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="M12 5l-7 7 7 7"/></svg></button>
+                <h3 id="diff-title">差异</h3>
+                <div class="head-actions">
+                  <button id="prev-change-btn" class="icon-btn" title="上一处改动（到头则跳上一个文件）">↑</button>
+                  <button id="next-change-btn" class="icon-btn" title="下一处改动（到底则跳下一个文件）">↓</button>
+                  <button id="diff-view-btn" class="icon-btn" title="切换并排 / 统一视图">并排</button>
+                <button id="diff-close-btn" class="icon-btn" title="关闭差异区">✕</button>
+                </div>
+              </div>
+              <div class="diff-body">
+                <ul id="commit-files" class="list detail-files"></ul>
+                <div class="diff-scroll pane-scroll">
+                  <div id="diff"></div>
+                </div>
+              </div>
+            </section>
+          </div>
+        </div>
+      </main>
+
+      <footer id="status-bar" class="status-bar">就绪</footer>
+
+      <div id="commit-overlay" class="modal-overlay" style="display: none">
+        <div class="modal commit-modal">
+          <div class="section-head">
+            <div id="commit-panel-title" class="modal-title">提交</div>
+            <button id="commit-close-btn" class="icon-btn" title="关闭 (Esc)">✕</button>
+          </div>
+                <div id="commit-body" class="commit-body">
+                  <section class="center">
+                    <div class="pane-head">
+                      <div class="section-head">
+                        <h3>改动</h3>
+                        <input id="changes-filter" class="filter-input" type="search" spellcheck="false"
+                               placeholder="过滤路径" />
+                        <button id="stage-all-btn" class="icon-btn" title="暂存全部">＋全部</button>
+                        <button id="unstage-all-btn" class="icon-btn" title="取消暂存全部">−全部</button>
+                        <button id="patch-btn" class="icon-btn" disabled
+                                title="从勾选的文件创建补丁">补丁</button>
+                      </div>
+                    </div>
+                    <ul id="changes" class="list pane-scroll"></ul>
+                    <div class="commit-box">
+                      <textarea id="commit-msg" placeholder="提交说明"></textarea>
+                      <div class="commit-options">
+                        <label class="amend-row" title="修补上一个提交而不新建提交">
+                          <input id="amend-cb" type="checkbox" />
+                          <span id="amend-label">修正提交</span>
+                        </label>
+                        <label class="amend-row" title="在提交说明末尾追加 Signed-off-by">
+                          <input id="signoff-cb" type="checkbox" />
+                          <span>Sign-off 提交</span>
+                        </label>
+                        <label class="amend-row author-field" title="覆盖本次提交的作者，留空则用 git 配置">
+                          <span>作者</span>
+                          <input id="author-input" type="text" spellcheck="false"
+                                 placeholder="名字 &lt;邮箱&gt;" />
+                        </label>
+                      </div>
+                      <div class="commit-actions">
+                        <button
+                          id="ai-msg-btn"
+                          class="icon-btn ai-btn"
+                          title="用 AI 生成提交说明"
+                          disabled
+                        >
+                          <svg viewBox="0 0 16 16" aria-hidden="true">
+                            <path
+                              d="M6 1.5 L7.1 4.9 L10.5 6 L7.1 7.1 L6 10.5 L4.9 7.1 L1.5 6 L4.9 4.9 Z
+                                 M11.5 9 L12.1 10.9 L14 11.5 L12.1 12.1 L11.5 14 L10.9 12.1 L9 11.5 L10.9 10.9 Z"
+                              fill="none"
+                              stroke="currentColor"
+                              stroke-width="1.2"
+                              stroke-linejoin="round"
+                            />
+                          </svg>
+                        </button>
+                        <div class="split-button">
+                          <button id="commit-btn" class="primary split-main" disabled>提交</button>
+                          <button
+                            id="commit-more-btn"
+                            class="primary split-arrow"
+                            title="更多提交操作"
+                            disabled
+                          >
+                            <svg viewBox="0 0 10 6" aria-hidden="true">
+                              <path
+                                d="M1 1.25 L5 4.75 L9 1.25"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="1.4"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                              />
+                            </svg>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </section>
+                </div>
+        </div>
+      </div>
+
+      <div id="modal-overlay" class="modal-overlay" style="display: none">
+        <div class="modal">
+          <div id="modal-title" class="modal-title"></div>
+          <input id="modal-input" type="text" spellcheck="false" />
+          <div class="modal-actions">
+            <button id="modal-cancel">取消</button>
+            <button id="modal-ok" class="primary">确定</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="context-menu" class="context-menu" style="display: none"></div>
+      <div id="context-submenu" class="context-menu" style="display: none"></div>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

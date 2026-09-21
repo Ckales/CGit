@@ -1,0 +1,34 @@
+{
+  "name": "cgit",
+  "private": true,
+  "version": "0.1.0",
+  "description": "A lightweight Git desktop client for macOS",
+  "author": "Ckales",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Ckales/CGit.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Ckales/CGit/issues"
+  },
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^3.0.0-alpha.0",
+    "@tauri-apps/plugin-dialog": "^3.0.0-alpha.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^3.0.0-alpha.0",
+    "vite": "^8.3.0"
+  }
+}

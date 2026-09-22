@@ -35,22 +35,40 @@ Flutter 3.47.5 要求 **Xcode 15 及以上**（源码 `xcode.dart:24`
 这台机器 macOS 15.7.5 装 Xcode 16.x 即可。App Store 只提供最新版，旧版去
 developer.apple.com/download/all 取。
 
-
-
 | 缺什么 | 影响 | 怎么装 |
 |---|---|---|
 | 完整 Xcode | 开窗口 / 出包 | App Store 装，然后 `sudo xcode-select -s /Applications/Xcode.app` + `sudo xcodebuild -license accept` |
 | CocoaPods | 只在用到插件时需要 | `brew install cocoapods` |
 
-也就是说：代码编译得过、逻辑和交互测试过，但**视觉效果（字体渲染、对齐、滚动手感）一次都没肉眼看过**。
-
-要真正开窗口，先生成 macOS 平台壳（本仓库不含 `macos/` 目录，那是 `flutter create` 的产物）：
+装好后生成 macOS 平台壳（`macos/` 不入库，是 `flutter create` 的产物）并指定仓库：
 
 ```bash
-cd flutter_ui && flutter create --platforms=macos --project-name cgit_flutter . && flutter run -d macos
+cd flutter_ui && flutter create --platforms=macos --project-name cgit_flutter .
+flutter run -d macos --dart-entrypoint-args /path/to/repo
 ```
 
-仓库路径从 argv 取，默认当前目录：`flutter run -d macos --dart-entrypoint-args /path/to/repo`
+### 必须关掉 App Sandbox
+
+`flutter create` 生成的 `macos/Runner/*.entitlements` **默认开启 App Sandbox**，
+而沙盒进程无法对任意路径执行 `git` 子进程 —— 症状是界面正常但读不到任何仓库数据。
+`macos/` 是 gitignored 的生成产物，所以**每次重新 `flutter create` 都要重做一遍**：
+
+```bash
+/usr/libexec/PlistBuddy -c "Delete :com.apple.security.app-sandbox" macos/Runner/DebugProfile.entitlements
+/usr/libexec/PlistBuddy -c "Delete :com.apple.security.app-sandbox" macos/Runner/Release.entitlements
+```
+
+Tauri 版本来就不开沙盒，所以这是对等配置。真要上 Mac App Store 得反过来：保留沙盒 +
+用 NSOpenPanel 让用户手选目录拿 security-scoped bookmark，argv 传路径那套就不能用了 ——
+这个约束 Tauri 版同样要面对，不是 Flutter 独有的。
+
+### 已在原生窗口验证
+
+Impeller (Metal) 后端，真实仓库数据。确认正常：中文在 UI 字体和等宽字体里的渲染、
+深色主题、DAG 泳道、ref 标签、分栏 diff 与行内高亮、提交列表与文件列表。
+
+**仍未验证**：中文输入法（需要人在键盘前用输入法实打，无法自动化）、
+大文件 diff 的滚动性能（`SelectionArea` 强制 eager 构建带来的天花板）。
 
 ## 实现了什么
 
@@ -68,7 +86,7 @@ cd flutter_ui && flutter create --platforms=macos --project-name cgit_flutter . 
 
 **数据层走 git CLI，没接 flutter_rust_bridge。** `lib/git.dart` 直接 `Process.run('git', …)`，
 返回结构刻意和 `lib.rs` 里 serialize 的 struct 一一对应。真要换框架时，这个文件换成 frb
-生成的绑定即可，`lib.rs` 里的 gix 逻辑一行不用动——那是机械改 20 个 `#[tauri::command]`
+生成的绑定即可，`lib.rs` 里的 gix 逻辑一行不用动——那是机械改 80 个 `#[tauri::command]`
 包装层，不是重写后端。跳过它是因为它不产生任何 UI 差异，却会吃掉这次对比的大部分时间。
 
 **没做文件选择器。** 需要 `file_selector` 插件，插件要 CocoaPods，CocoaPods 要 Xcode。

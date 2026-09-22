@@ -10,7 +10,7 @@ import 'git_types.dart';
 
    ponytail: this port shells out to the git CLI directly so the UI comparison
    runs without a bridge layer. The real port keeps lib.rs as-is and exposes the
-   same 20 commands through flutter_rust_bridge — a mechanical change to the
+   same 80 commands through flutter_rust_bridge — a mechanical change to the
    #[tauri::command] wrappers, not to the gix logic underneath. */
 
 /// Where the app starts looking when argv gives it nothing.

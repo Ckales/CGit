@@ -33,10 +33,18 @@ class _CGitAppState extends State<CGitApp> {
       debugShowCheckedModeBanner: false,
       home: Theming(
         palette: _palette,
-        child: RepoScreen(
-          startPath: widget.startPath,
-          onToggleTheme: () => setState(
-            () => _palette = _palette == Palette.dark ? Palette.light : Palette.dark,
+        // This app draws its own chrome rather than using Scaffold, and Scaffold
+        // is what normally supplies the Material ancestor that TextField and the
+        // other material widgets assert on. Without this, the commit box renders
+        // as a red "No Material widget found" block instead of an input.
+        // `transparency` provides the ancestor without painting a background.
+        child: Material(
+          type: MaterialType.transparency,
+          child: RepoScreen(
+            startPath: widget.startPath,
+            onToggleTheme: () => setState(
+              () => _palette = _palette == Palette.dark ? Palette.light : Palette.dark,
+            ),
           ),
         ),
       ),

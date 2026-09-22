@@ -1,11 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'blame_view.dart';
 import 'commit_sheet.dart';
+import 'context_menu.dart';
 import 'diff_view.dart';
 import 'git.dart';
 import 'git_text.dart';
 import 'history_view.dart';
+import 'merge_view.dart';
+import 'network_ops.dart';
 import 'theme.dart';
 
 Future<void> main(List<String> args) async {
@@ -80,6 +84,13 @@ class CommitFileDiff extends DiffTarget {
   final String path;
 }
 
+/// Per-line authorship rather than a diff. It shares the pane because it
+/// answers the same question from the other end: who last touched this line.
+class BlameTarget extends DiffTarget {
+  const BlameTarget(this.path);
+  final String path;
+}
+
 class RepoScreen extends StatefulWidget {
   const RepoScreen(
       {super.key, required this.startPath, required this.onToggleTheme});
@@ -106,9 +117,31 @@ class _RepoScreenState extends State<RepoScreen> {
   List<FileStatus> _commitFiles = const [];
   DiffTarget _target = const NoDiff();
   List<String> _hunks = const [];
+  List<BlameLine> _blame = const [];
 
   DiffMode _mode = DiffMode.split;
   bool _commitOpen = false;
+
+  /// Files still carrying conflict markers, and which multi-step operation the
+  /// repo is in the middle of ("none" when it is not). They travel together:
+  /// a merge, rebase, cherry-pick and revert all stop on conflict but each has
+  /// its own continue/abort, and `git merge --abort` during a cherry-pick fails
+  /// outright.
+  List<String> _conflicts = const [];
+  String _op = 'none';
+
+  /// Where HEAD stands against its upstream. Drives the ahead/behind counters
+  /// and what the push button says it will do.
+  Tracking? _tracking;
+  List<StashEntry> _stashes = const [];
+
+  /// One network call at a time: they all touch the same refs, and a fetch
+  /// racing a push produces failures that are nobody's fault.
+  bool _netBusy = false;
+
+  /// The file open in the merge window, and its worktree text.
+  String? _mergeFile;
+  String _mergeContent = '';
 
   double _sidebarWidth = 220;
   double _historyHeight = 260;
@@ -157,6 +190,10 @@ class _RepoScreenState extends State<RepoScreen> {
         git.remotes(),
         git.status(),
         git.graph(),
+        git.conflicts(),
+        git.repoState(),
+        git.tracking(),
+        git.stashList(),
       ]);
       if (!mounted) return;
       setState(() {
@@ -166,6 +203,10 @@ class _RepoScreenState extends State<RepoScreen> {
         _remotes = results[3] as List<RemoteInfo>;
         _changes = results[4] as List<FileStatus>;
         _graph = layoutGraph(results[5] as List<GraphCommit>);
+        _conflicts = results[6] as List<String>;
+        _op = results[7] as String;
+        _tracking = results[8] as Tracking;
+        _stashes = results[9] as List<StashEntry>;
         _status = '就绪';
       });
       await _reloadDiff();
@@ -189,8 +230,42 @@ class _RepoScreenState extends State<RepoScreen> {
             header: '',
             hunks: splitPatchText(await git.commitDiff(oid, path)).hunks,
           ),
+        // Blame renders from its own list, not from hunks.
+        BlameTarget() => const Hunks(header: '', hunks: []),
       };
       if (mounted) setState(() => _hunks = hunks.hunks);
+    } on GitError catch (e) {
+      if (mounted) setState(() => _status = e.message);
+    }
+  }
+
+  List<MenuAction> _fileMenu(FileStatus f) => [
+        MenuAction(f.staged ? '取消暂存' : '暂存', () {
+          _stashAction(
+            f.staged ? '取消暂存' : '暂存',
+            () async {
+              if (f.staged) {
+                await _git!.unstage(f.path);
+              } else {
+                await _git!.stage(f.path);
+              }
+              return '';
+            },
+          );
+        }),
+        MenuAction('逐行归属 (blame)', () => _showBlame(f.path)),
+      ];
+
+  Future<void> _showBlame(String file) async {
+    final git = _git;
+    if (git == null) return;
+    try {
+      final lines = await git.blame(file);
+      if (!mounted) return;
+      setState(() {
+        _blame = lines;
+        _target = BlameTarget(file);
+      });
     } on GitError catch (e) {
       if (mounted) setState(() => _status = e.message);
     }
@@ -221,6 +296,251 @@ class _RepoScreenState extends State<RepoScreen> {
     } on GitError catch (e) {
       if (mounted) setState(() => _status = e.message);
     }
+  }
+
+  /* ---------- stash ---------- */
+
+  /// Wraps the stash commands with the same report-and-refresh the network
+  /// actions get. `confirm` is the prompt shown first for destructive ones.
+  Future<void> _stashAction(
+    String label,
+    Future<String> Function() action, {
+    String? confirm,
+  }) async {
+    final git = _git;
+    if (git == null) return;
+    if (confirm != null && !await _confirm(title: label, body: confirm)) return;
+
+    try {
+      final out = await action();
+      await _refresh();
+      if (mounted) setState(() => _status = out.trim().isEmpty ? '已$label' : out.trim());
+    } on GitError catch (e) {
+      if (mounted) setState(() => _status = e.message);
+    }
+  }
+
+  List<MenuAction> _stashMenu(StashEntry s) => [
+        MenuAction('弹出（应用并删除）',
+            () => _stashAction('弹出储藏', () => _git!.stashPop(s.index.toInt()))),
+        MenuAction(
+          '删除',
+          () => _stashAction(
+            '删除储藏',
+            () => _git!.stashDrop(s.index.toInt()),
+            // git keeps dropped stashes unreachable for a while, but nothing in
+            // the UI can get them back — so this asks.
+            confirm: '删除储藏「${s.message}」？该储藏不会再出现在列表里。',
+          ),
+          danger: true,
+        ),
+      ];
+
+  /* ---------- network ---------- */
+
+  /// Runs one network action at a time, reporting through the status bar and
+  /// refreshing afterwards either way — a fetch that fails halfway still moved
+  /// some refs, and a pull that stops on conflict has already written files.
+  Future<void> _network(String label, Future<String> Function() action) async {
+    if (_netBusy) return;
+    setState(() {
+      _netBusy = true;
+      _status = '$label…';
+    });
+    try {
+      final out = await action();
+      await _refresh();
+      if (!mounted) return;
+      final last = out.split('\n').where((l) => l.trim().isNotEmpty).lastOrNull;
+      setState(() => _status = last == null ? '$label完成' : '$label完成。$last');
+    } on GitError catch (e) {
+      await _refresh();
+      if (mounted) setState(() => _status = networkErrorText(e.message));
+    } finally {
+      if (mounted) setState(() => _netBusy = false);
+    }
+  }
+
+  Future<void> _fetch() => _network('抓取', () => _git!.fetch());
+
+  Future<void> _pull() => _network('拉取', () => _git!.pull());
+
+  Future<void> _push() => _network(
+        '推送',
+        () => pushWithRetry(
+          _git!,
+          chooseStrategy: _askUpdateStrategy,
+          onProgress: (m) {
+            if (mounted) setState(() => _status = m);
+          },
+        ),
+      );
+
+  /// Only asked when git config says nothing about `pull.rebase`. Cancelling
+  /// aborts the push retry rather than picking a default — rebasing someone's
+  /// commits because they dismissed a dialog is not a recoverable mistake.
+  Future<UpdateStrategy?> _askUpdateStrategy() async {
+    final p = Theming.of(context);
+    return showDialog<UpdateStrategy>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: p.bgElev,
+        title: Text('远端有新提交',
+            style: ui.copyWith(color: p.text, fontSize: 15)),
+        content: Text(
+          '推送被拒绝：远端已经领先。要先用哪种方式更新本地分支？\n\n'
+          'git 配置里没有 pull.rebase，所以这次由你决定。',
+          style: ui.copyWith(color: p.text),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: Text('取消推送', style: ui.copyWith(color: p.textDim)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(UpdateStrategy.merge),
+            child: Text('合并', style: ui.copyWith(color: p.accent)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(UpdateStrategy.rebase),
+            child: Text('变基', style: ui.copyWith(color: p.accent)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /* ---------- conflicts ---------- */
+
+  /// Labels for the four operations that stop on conflict. Each has its own
+  /// --continue / --abort, which is why the banner names the operation instead
+  /// of saying "continue".
+  static const _opLabels = {
+    'rebase': '变基',
+    'cherry-pick': '拣选',
+    'revert': '回退',
+    'merge': '合并',
+  };
+
+  String get _opLabel => _opLabels[_op] ?? '操作';
+
+  Future<void> _openMerge(String file) async {
+    final git = _git;
+    if (git == null) return;
+    try {
+      final content = await git.readFile(file);
+      if (!mounted) return;
+      setState(() {
+        _mergeFile = file;
+        _mergeContent = content;
+      });
+    } on GitError catch (e) {
+      if (mounted) setState(() => _status = e.message);
+    }
+  }
+
+  Future<void> _resolveWith(String content) async {
+    final git = _git;
+    final file = _mergeFile;
+    if (git == null || file == null) return;
+    try {
+      await git.resolveWith(file, content);
+      if (mounted) setState(() => _mergeFile = null);
+      await _refresh();
+      if (mounted) setState(() => _status = '已解决 $file');
+    } on GitError catch (e) {
+      if (mounted) setState(() => _status = e.message);
+    }
+  }
+
+  Future<void> _resolveSide(String side) async {
+    final git = _git;
+    final file = _mergeFile;
+    if (git == null || file == null) return;
+    try {
+      await git.resolveSide(file, side);
+      if (mounted) setState(() => _mergeFile = null);
+      await _refresh();
+      if (mounted) {
+        setState(() => _status = '已采用${side == 'ours' ? '我方' : '对方'} — $file');
+      }
+    } on GitError catch (e) {
+      if (mounted) setState(() => _status = e.message);
+    }
+  }
+
+  /// Per-block base text only exists in diff3-style markers, so getting it means
+  /// asking git to regenerate the file — which throws away manual edits to it.
+  /// Hence the confirmation before, and the re-read after.
+  Future<void> _toggleBase(bool wantBase) async {
+    final git = _git;
+    final file = _mergeFile;
+    if (git == null || file == null) return;
+
+    final ok = await _confirm(
+      title: wantBase ? '显示共同祖先' : '隐藏共同祖先',
+      body: '将重新生成 "$file" 的冲突标记'
+          '${wantBase ? '（加入 base 段）' : '（移除 base 段）'}。'
+          '该文件上的手工修改会丢失，已选择的取舍也会重置。继续？',
+    );
+    if (!ok) return;
+
+    try {
+      await git.setConflictStyle(file, wantBase ? 'diff3' : 'merge');
+      final content = await git.readFile(file);
+      if (mounted) setState(() => _mergeContent = content);
+    } on GitError catch (e) {
+      if (mounted) setState(() => _status = e.message);
+    }
+  }
+
+  Future<void> _opAction(String action) async {
+    final git = _git;
+    if (git == null) return;
+
+    if (action == 'abort') {
+      final ok = await _confirm(
+        title: '中止$_opLabel',
+        body: '中止$_opLabel？已解决的内容会被丢弃。',
+      );
+      if (!ok) return;
+    }
+
+    try {
+      final out = await git.opAction(_op, action);
+      await _refresh();
+      if (!mounted) return;
+      final verb = {'continue': '继续', 'abort': '中止', 'skip': '跳过'}[action];
+      final last = out.split('\n').where((l) => l.trim().isNotEmpty).lastOrNull;
+      setState(() => _status = last ?? '已$verb$_opLabel');
+    } on GitError catch (e) {
+      // Refresh either way: the operation may have advanced before failing.
+      await _refresh();
+      if (mounted) setState(() => _status = e.message);
+    }
+  }
+
+  Future<bool> _confirm({required String title, required String body}) async {
+    final p = Theming.of(context);
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: p.bgElev,
+        title: Text(title, style: ui.copyWith(color: p.text, fontSize: 15)),
+        content: Text(body, style: ui.copyWith(color: p.text)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: Text('取消', style: ui.copyWith(color: p.textDim)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: Text('继续', style: ui.copyWith(color: p.red)),
+          ),
+        ],
+      ),
+    );
+    return ok ?? false;
   }
 
   Future<void> _applyPartial(String patch, bool reverse) async {
@@ -278,6 +598,15 @@ class _RepoScreenState extends State<RepoScreen> {
                     _statusBar(p),
                   ],
                 ),
+                if (_mergeFile != null)
+                  MergeWindow(
+                    file: _mergeFile!,
+                    content: _mergeContent,
+                    onClose: () => setState(() => _mergeFile = null),
+                    onResolveWith: _resolveWith,
+                    onResolveSide: _resolveSide,
+                    onToggleBase: _toggleBase,
+                  ),
                 if (_commitOpen)
                   CommitSheet(
                     changes: _changes,
@@ -306,6 +635,7 @@ class _RepoScreenState extends State<RepoScreen> {
         children: [
           Text(_git == null ? '未打开仓库' : '$_repoName — $_branch',
               style: ui.copyWith(color: p.textDim)),
+          _trackingChip(p),
           const Spacer(),
           _ToolButton(
               label: '提交',
@@ -313,6 +643,18 @@ class _RepoScreenState extends State<RepoScreen> {
               onTap: () {
                 setState(() => _commitOpen = true);
               }),
+          // Disabled while any network action runs: they all move the same refs,
+          // and a fetch racing a push fails in ways that are nobody's fault.
+          _ToolButton(
+            label: '推送',
+            enabled: _git != null && !_netBusy,
+            onTap: _push,
+            tooltip: _tracking == null ? null : pushTargetText(_tracking!),
+          ),
+          _ToolButton(
+              label: '拉取', enabled: _git != null && !_netBusy, onTap: _pull),
+          _ToolButton(
+              label: '抓取', enabled: _git != null && !_netBusy, onTap: _fetch),
           _ToolButton(label: '刷新', enabled: _git != null, onTap: _refresh),
           _ToolButton(
             label: _mode == DiffMode.split ? '并排' : '统一',
@@ -347,19 +689,47 @@ class _RepoScreenState extends State<RepoScreen> {
           for (final r in _remotes) _SidebarRow(label: r.name, palette: p),
           _SectionHead(label: '标签', palette: p),
           for (final t in _tags) _SidebarRow(label: t, palette: p),
+          _SectionHead(
+            label: '储藏',
+            palette: p,
+            action: _git == null ? null : _SectionAction('⤓', '储藏当前改动', () {
+              _stashAction('储藏改动', () => _git!.stashSave());
+            }),
+          ),
+          for (final st in _stashes)
+            ContextMenuRegion(
+              items: () => _stashMenu(st),
+              child: _SidebarRow(
+                label: st.message,
+                palette: p,
+                leading: '${st.index}',
+                leadingColor: p.textDim,
+                // Left click opens the same menu: a stash row has no primary
+                // action worth guessing at, and hunting for the right mouse
+                // button to find out a row is actionable is worse.
+                onTapAt: (pos) => showRepoMenu(
+                  context: context,
+                  position: pos,
+                  items: _stashMenu(st),
+                ),
+              ),
+            ),
           _SectionHead(label: '改动', palette: p),
           for (final f in _changes)
-            _SidebarRow(
-              label: f.path,
-              palette: p,
-              leading: f.status,
-              leadingColor: f.staged ? p.green : p.yellow,
-              onTap: () => _showFile(f),
-              active: switch (_target) {
-                WorkingFileDiff(:final path, :final staged) =>
-                  path == f.path && staged == f.staged,
-                _ => false,
-              },
+            ContextMenuRegion(
+              items: () => _fileMenu(f),
+              child: _SidebarRow(
+                label: f.path,
+                palette: p,
+                leading: f.status,
+                leadingColor: f.staged ? p.green : p.yellow,
+                onTap: () => _showFile(f),
+                active: switch (_target) {
+                  WorkingFileDiff(:final path, :final staged) =>
+                    path == f.path && staged == f.staged,
+                  _ => false,
+                },
+              ),
             ),
         ],
       ),
@@ -385,6 +755,9 @@ class _RepoScreenState extends State<RepoScreen> {
             ],
           ),
         ),
+        // Between history and diff, where the Tauri version puts it: the user
+        // sees it right after the operation that stopped.
+        if (_conflicts.isNotEmpty || _op != 'none') _conflictBanner(p),
         _Splitter(
           axis: Axis.vertical,
           palette: p,
@@ -403,6 +776,7 @@ class _RepoScreenState extends State<RepoScreen> {
       WorkingFileDiff(:final path, :final staged) =>
         '$path${staged ? '（已暂存）' : ''}',
       CommitFileDiff(:final path) => path,
+      BlameTarget(:final path) => '逐行归属 — $path',
     };
     final staged = switch (_target) {
       WorkingFileDiff(:final staged) => staged,
@@ -448,17 +822,117 @@ class _RepoScreenState extends State<RepoScreen> {
                   ),
                 ),
               Expanded(
-                child: DiffPane(
-                  hunks: _hunks,
-                  mode: _mode,
-                  staged: staged,
-                  onApply: interactive ? _applyPartial : null,
-                ),
+                child: switch (_target) {
+                  BlameTarget() => BlameView(
+                      lines: _blame,
+                      // A sha jumps to that commit's diff for this file — the
+                      // usual next question after "who wrote this line".
+                      onOpenCommit: (oid) async {
+                        final path = (_target as BlameTarget).path;
+                        setState(() => _target = CommitFileDiff(oid, path));
+                        await _reloadDiff();
+                      },
+                    ),
+                  _ => DiffPane(
+                      hunks: _hunks,
+                      mode: _mode,
+                      staged: staged,
+                      onApply: interactive ? _applyPartial : null,
+                    ),
+                },
               ),
             ],
           ),
         ),
       ],
+    );
+  }
+
+  /// How far HEAD is from its upstream. Nothing is shown when the branch is in
+  /// step — a pair of zeroes is noise, and their absence is the same message.
+  Widget _trackingChip(Palette p) {
+    final t = _tracking;
+    if (t == null || (t.ahead == BigInt.zero && t.behind == BigInt.zero)) {
+      return const SizedBox.shrink();
+    }
+    return Padding(
+      padding: const EdgeInsets.only(left: 8),
+      child: Row(
+        children: [
+          if (t.ahead > BigInt.zero)
+            Text('↑${t.ahead}',
+                style: ui.copyWith(color: p.green, fontSize: 11)),
+          if (t.ahead > BigInt.zero && t.behind > BigInt.zero)
+            const SizedBox(width: 4),
+          if (t.behind > BigInt.zero)
+            Text('↓${t.behind}',
+                style: ui.copyWith(color: p.yellow, fontSize: 11)),
+        ],
+      ),
+    );
+  }
+
+  /// The conflict banner: what stopped, which files are still unresolved, and
+  /// the continue/abort that matches the operation. Continue stays disabled
+  /// while any file is unresolved — git would refuse anyway, with a worse
+  /// message.
+  Widget _conflictBanner(Palette p) {
+    final blocked = _conflicts.isNotEmpty;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: p.yellow.withValues(alpha: 0.12),
+        border: Border(
+          top: BorderSide(color: p.border),
+          bottom: BorderSide(color: p.border),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            blocked
+                ? '$_opLabel进行中 — ${_conflicts.length} 处冲突待解决'
+                : '$_opLabel进行中 — 冲突已解决，可继续',
+            style: ui.copyWith(color: p.yellow),
+          ),
+          const SizedBox(height: 4),
+          for (final f in _conflicts)
+            _SidebarRow(
+              label: f,
+              palette: p,
+              leading: '!',
+              leadingColor: p.red,
+              onTap: () => _openMerge(f),
+            ),
+          if (_op != 'none') ...[
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                _ToolButton(
+                  label: '继续$_opLabel',
+                  enabled: !blocked,
+                  onTap: () => _opAction('continue'),
+                ),
+                _ToolButton(
+                  label: '中止$_opLabel',
+                  enabled: true,
+                  onTap: () => _opAction('abort'),
+                ),
+                // Only the replaying operations can skip a commit; a merge has
+                // nothing to skip.
+                if (_op != 'merge')
+                  _ToolButton(
+                    label: '跳过此提交',
+                    enabled: true,
+                    onTap: () => _opAction('skip'),
+                  ),
+              ],
+            ),
+          ],
+        ],
+      ),
     );
   }
 
@@ -515,11 +989,18 @@ class _Splitter extends StatelessWidget {
 }
 
 class _ToolButton extends StatefulWidget {
-  const _ToolButton(
-      {required this.label, required this.enabled, required this.onTap});
+  const _ToolButton({
+    required this.label,
+    required this.enabled,
+    required this.onTap,
+    this.tooltip,
+  });
   final String label;
   final bool enabled;
   final VoidCallback onTap;
+
+  /// Where a push would land, for the push button: `main → origin : main`.
+  final String? tooltip;
 
   @override
   State<_ToolButton> createState() => _ToolButtonState();
@@ -531,7 +1012,7 @@ class _ToolButtonState extends State<_ToolButton> {
   @override
   Widget build(BuildContext context) {
     final p = Theming.of(context);
-    return MouseRegion(
+    final button = MouseRegion(
       cursor:
           widget.enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
       onEnter: (_) => setState(() => _hover = true),
@@ -553,22 +1034,56 @@ class _ToolButtonState extends State<_ToolButton> {
         ),
       ),
     );
+
+    // The push button says where it would land; the others need no explaining.
+    return widget.tooltip == null
+        ? button
+        : Tooltip(message: widget.tooltip!, child: button);
   }
 }
 
+/// The ＋ / ⤓ button some sidebar sections carry.
+class _SectionAction {
+  const _SectionAction(this.glyph, this.tooltip, this.onTap);
+  final String glyph;
+  final String tooltip;
+  final VoidCallback onTap;
+}
+
 class _SectionHead extends StatelessWidget {
-  const _SectionHead({required this.label, required this.palette});
+  const _SectionHead({required this.label, required this.palette, this.action});
   final String label;
   final Palette palette;
+  final _SectionAction? action;
 
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(10, 10, 10, 4),
-      child: Text(
-        label,
-        style: ui.copyWith(
-            color: palette.textDim, fontSize: 11, letterSpacing: 0.4),
+      padding: const EdgeInsets.fromLTRB(10, 10, 6, 4),
+      child: Row(
+        children: [
+          Text(
+            label,
+            style: ui.copyWith(
+                color: palette.textDim, fontSize: 11, letterSpacing: 0.4),
+          ),
+          const Spacer(),
+          if (action != null)
+            Tooltip(
+              message: action!.tooltip,
+              child: MouseRegion(
+                cursor: SystemMouseCursors.click,
+                child: GestureDetector(
+                  onTap: action!.onTap,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                    child: Text(action!.glyph,
+                        style: ui.copyWith(color: palette.textDim)),
+                  ),
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -608,6 +1123,7 @@ class _SidebarRow extends StatefulWidget {
     this.leadingColor,
     this.active = false,
     this.onTap,
+    this.onTapAt,
   });
 
   final String label;
@@ -616,6 +1132,10 @@ class _SidebarRow extends StatefulWidget {
   final Color? leadingColor;
   final bool active;
   final VoidCallback? onTap;
+
+  /// Like [onTap], but handed the click position — for rows whose action is to
+  /// open a menu, which has to appear where the pointer is.
+  final void Function(Offset position)? onTapAt;
 
   @override
   State<_SidebarRow> createState() => _SidebarRowState();
@@ -636,6 +1156,9 @@ class _SidebarRowState extends State<_SidebarRow> {
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: widget.onTap,
+        onTapUp: widget.onTapAt == null
+            ? null
+            : (d) => widget.onTapAt!(d.globalPosition),
         child: Container(
           height: 22,
           padding: const EdgeInsets.symmetric(horizontal: 10),

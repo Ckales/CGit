@@ -139,6 +139,88 @@ class Git {
             signoff: signoff,
           ));
 
+  /// Per-line authorship of the *committed* version of a file — core reads the
+  /// HEAD blob, not the worktree, so line numbers cannot drift out of step with
+  /// the blame result.
+  Future<List<BlameLine>> blame(String file) =>
+      _guard(() => rust.getBlame(path: repo, file: file));
+
+  /* ---------- stash ---------- */
+
+  Future<List<StashEntry>> stashList() => _guard(() => rust.stashList(path: repo));
+
+  /// An empty message lets git write its own ("WIP on main: …").
+  Future<String> stashSave({String message = ''}) =>
+      _guard(() => rust.stashSave(path: repo, message: message));
+
+  /// Apply and remove in one step, which is what "pop" means to git.
+  Future<String> stashPop(int index) =>
+      _guard(() => rust.stashPop(path: repo, index: BigInt.from(index)));
+
+  Future<String> stashDrop(int index) =>
+      _guard(() => rust.stashDrop(path: repo, index: BigInt.from(index)));
+
+  /* ---------- network ---------- */
+
+  /// Where HEAD stands against its upstream: branch, upstream, ahead, behind.
+  Future<Tracking> tracking() => _guard(() => rust.getBranchTracking(path: repo));
+
+  /// The files a push would carry — what HEAD has and the upstream does not.
+  Future<List<FileStatus>> pushFiles() =>
+      _guard(() => rust.getPushFiles(path: repo));
+
+  Future<String> fetch() => _guard(() => rust.gitFetch(path: repo));
+
+  /// `strategy` is null (--ff-only), 'merge' or 'rebase'.
+  Future<String> pull({String? strategy}) =>
+      _guard(() => rust.gitPull(path: repo, strategy: strategy));
+
+  Future<String> push() => _guard(() => rust.gitPush(path: repo));
+
+  /// `--force-with-lease`, not `--force`: it refuses to clobber commits that
+  /// landed on the remote since our last fetch.
+  Future<String> pushForce() => _guard(() => rust.gitPushForce(path: repo));
+
+  /// How git itself would resolve `pull.rebase` for the current branch.
+  /// Null means git config is silent — the cue to ask the user.
+  Future<bool?> pullRebase() => _guard(() => rust.getPullRebase(path: repo));
+
+  /* ---------- conflicts ---------- */
+
+  /// Paths still carrying conflict markers in the index.
+  Future<List<String>> conflicts() => _guard(() => rust.getConflicts(path: repo));
+
+  /// Which multi-step operation the repo is in the middle of, or "none".
+  /// The UI needs it to offer the *matching* continue/abort: `git merge --abort`
+  /// fails outright during a cherry-pick.
+  Future<String> repoState() => _guard(() => rust.getRepoState(path: repo));
+
+  Future<String> readFile(String file) =>
+      _guard(() => rust.readWorktreeFile(path: repo, file: file));
+
+  /// Resolve a whole file to one side — the fallback for conflicts with no text
+  /// markers (binary, add/add).
+  Future<void> resolveSide(String file, String side) =>
+      _guard(() => rust.resolveConflict(path: repo, file: file, side: side));
+
+  /// Write the merged result and mark the file resolved.
+  Future<void> resolveWith(String file, String content) =>
+      _guard(() => rust.resolveWithContent(path: repo, file: file, content: content));
+
+  /// Rewrite a file's markers in "merge" or "diff3" style. diff3 is the only way
+  /// to get per-block common-ancestor text, and it regenerates the file from the
+  /// index — so it discards manual edits, and the caller must confirm first.
+  Future<String> setConflictStyle(String file, String style) =>
+      _guard(() => rust.setConflictStyle(path: repo, file: file, style: style));
+
+  /// continue / abort / skip on the in-progress merge, rebase, cherry-pick or
+  /// revert. `op` comes from [repoState].
+  Future<String> opAction(String op, String action) =>
+      _guard(() => rust.opAction(path: repo, op: op, action: action));
+
+  Future<String> mergeBranch(String name) =>
+      _guard(() => rust.mergeBranch(path: repo, name: name));
+
   /* ---------- watching ---------- */
 
   /// "refs" when the change moved HEAD or a ref (branch labels and the graph are

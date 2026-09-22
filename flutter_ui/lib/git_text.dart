@@ -395,8 +395,45 @@ class ConflictBlock {
   final List<String> theirs;
 
   /// Which side the user picked: null (default to ours), 'ours', 'theirs',
-  /// 'both', or 'none' when both sides are rejected.
+  /// 'both', or 'none' when both sides are rejected. [assembleConflict] reads
+  /// only this and [edited].
   String? resolution;
+
+  /// The merge window's per-side decision: null undecided, true merged into the
+  /// result, false dropped. Two independent tri-states rather than one radio
+  /// choice, because "take both" is a real outcome and "I have looked at this
+  /// side and rejected it" is different from "I have not looked yet".
+  /// [syncResolution] collapses the pair into [resolution].
+  bool? takeOurs;
+  bool? takeTheirs;
+
+  /// A block the user has finished with: either typed over, or decided on both
+  /// sides. The merge window refuses to save while any conflict is undecided.
+  bool get decided =>
+      edited != null || (takeOurs != null && takeTheirs != null);
+
+  /// The result lines implied by the two side decisions, before any hand edit.
+  List<String> get resultLines => [
+        if (takeOurs == true) ...ours,
+        if (takeTheirs == true) ...theirs,
+      ];
+
+  /// Fold the two side decisions into the single resolution assembleConflict
+  /// understands. Both sides dropped is 'none'; anything still undecided leaves
+  /// it null, which assembles as "ours" — the same default git leaves behind.
+  void syncResolution() {
+    if (takeOurs == true && takeTheirs == true) {
+      resolution = 'both';
+    } else if (takeOurs == true) {
+      resolution = 'ours';
+    } else if (takeTheirs == true) {
+      resolution = 'theirs';
+    } else if (takeOurs == false && takeTheirs == false) {
+      resolution = 'none';
+    } else {
+      resolution = null;
+    }
+  }
 
   /// Hand-edited replacement text. Wins over [resolution] — the merge window's
   /// middle column is editable, for context blocks as well as conflicts.

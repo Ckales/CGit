@@ -310,9 +310,11 @@ class _ButtonState extends State<_Button> {
   Widget build(BuildContext context) {
     final p = Theming.of(context);
     final enabled = widget.onTap != null;
-    final bg = widget.primary
-        ? (enabled ? p.accent : p.accent.withValues(alpha: 0.4))
-        : (_hover ? p.bgHover : p.bgElev);
+    // Same rule as the merge window: a disabled primary loses the accent
+    // instead of fading it, so "cannot press this" is unmistakable.
+    final bg = widget.primary && enabled
+        ? p.accent
+        : (_hover && enabled ? p.bgHover : p.bgElev);
 
     return MouseRegion(
       cursor: enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
@@ -324,13 +326,15 @@ class _ButtonState extends State<_Button> {
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
           decoration: BoxDecoration(
             color: bg,
-            border: Border.all(color: widget.primary ? bg : p.border),
+            border: Border.all(color: widget.primary && enabled ? bg : p.border),
             borderRadius: BorderRadius.circular(5),
           ),
           child: Text(
             widget.label,
             style: ui.copyWith(
-              color: widget.primary ? const Color(0xFFFFFFFF) : p.text,
+              color: !enabled
+                  ? p.textDim
+                  : (widget.primary ? const Color(0xFFFFFFFF) : p.text),
             ),
           ),
         ),

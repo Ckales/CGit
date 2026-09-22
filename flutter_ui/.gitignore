@@ -1,0 +1,7 @@
+.dart_tool/
+build/
+.packages
+pubspec.lock
+# flutter create 生成的平台壳，不入库
+macos/
+web/

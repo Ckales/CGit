@@ -460,3 +460,10 @@ test("pathTree keeps root-level files and does not swallow the root", () => {
   assert.deepEqual(root.dirs.map((d) => d.name), ["src"]);
   assert.equal(root.count, 2);
 });
+
+test("pathTree can keep every folder level for an interactive tree", () => {
+  const root = pathTree([{ path: "internal/asyncvideo/manager.go", status: "modified" }], false);
+  assert.equal(root.dirs[0].name, "internal");
+  assert.equal(root.dirs[0].dirs[0].name, "asyncvideo");
+  assert.equal(root.dirs[0].dirs[0].files[0].path, "internal/asyncvideo/manager.go");
+});

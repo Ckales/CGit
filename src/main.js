@@ -527,6 +527,7 @@ async function setActiveRepo(path) {
    can't paint stale data over fresh data. */
 let refreshGen = 0;
 const isStale = (gen) => gen !== refreshGen;
+const collapsedChangeNodes = new Set();
 
 /* The same idea for the diff pane, on its own counter: clicking a file fires a
    git call, and clicking the next one before it lands must not let the first
@@ -601,7 +602,7 @@ async function refreshChanges(gen = ++refreshGen) {
   // doesn't reset the ↑/↓ position.
   const prevKey = navFiles[navIndex]?.key ?? null;
   navFiles = [];
-
+  navIndex = -1;
   list.innerHTML = "";
   if (!repos.length) {
     // Distinct from a clean worktree: claiming "clean" with no repo open sent
@@ -617,63 +618,137 @@ async function refreshChanges(gen = ++refreshGen) {
   }
 
   for (const { repo, files, error } of shown) {
-    // With one repo there's no hierarchy worth drawing.
-    if (isMulti() && (files.length || error)) {
-      const head = document.createElement("li");
-      head.className = "repo-group" + (repo.path === repoPath ? " current" : "");
-      head.title = `${repo.path}（点击设为当前仓库）`;
-      const name = document.createElement("span");
-      name.textContent = `${repo.name} · ${files.length} 个文件`;
-      const branch = document.createElement("span");
-      branch.className = "repo-branch";
-      branch.textContent = repo.branch;
-      head.append(name, branch);
-      head.onclick = () => setActiveRepo(repo.path);
-      list.appendChild(head);
-    }
+    if (!files.length && !error) continue;
+    const repoItem = document.createElement("li");
+    repoItem.className = "change-tree-node";
+    const repoDetails = changeTreeDetails(`${repo.path}|root`, !!needle);
+    const repoHead = document.createElement("summary");
+    repoHead.className = "change-tree-row repo" + (repo.path === repoPath ? " current" : "");
+    repoHead.title = repo.path;
+    if (!error) repoHead.appendChild(changeTreeCheckbox(files, repo.path));
+    const repoNameEl = document.createElement("span");
+    repoNameEl.className = "tree-name";
+    repoNameEl.onclick = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setActiveRepo(repo.path);
+    };
+    const fileCount = new Set(files.map((f) => f.path)).size;
+    repoNameEl.textContent = `${repo.name}  ${fileCount} 个文件`;
+    const branch = document.createElement("span");
+    branch.className = "repo-branch";
+    branch.textContent = repo.branch;
+    repoHead.append(repoNameEl, branch);
+    const repoTree = document.createElement("ul");
+    repoTree.className = "list";
     if (error) {
       const li = document.createElement("li");
-      li.className = "empty";
+      li.className = "empty tree-error";
       li.textContent = `读取失败：${error}`;
-      list.appendChild(li);
-      continue;
+      repoTree.appendChild(li);
     }
 
-    // The same file can appear on both sides — staged one edit, then edited
-    // again. Group by side, because two identical-looking rows differing only
-    // by a checkbox is not something anyone should have to decode.
-    const groups = [
-      ["冲突", files.filter((f) => f.status === "conflict")],
-      ["已暂存", files.filter((f) => f.staged)],
-      ["未暂存", files.filter((f) => !f.staged && f.status !== "conflict")],
-    ];
-    for (const [label, group] of groups) {
-      if (!group.length) continue;
-      const head = document.createElement("li");
-      head.className = "group-label" + (isMulti() ? " changes-indent" : "");
-      head.textContent = `${label} (${group.length})`;
-      list.appendChild(head);
-      for (const f of group) {
-        const index = navFiles.length;
-        const row = changeRow(f, repo.path, index);
-        navFiles.push({
-          // The key distinguishes the staged and unstaged rows of one path,
-          // which the display label deliberately does not.
-          key: row.dataset.fileKey,
-          label: (isMulti() ? `${repo.name}/` : "") + f.path,
-          open: () =>
-            f.status === "conflict"
-              ? showConflict(f.path, repo.path)
-              : showDiff(f.path, f.staged, repo.path),
-        });
-        list.appendChild(row);
-      }
+    // A file can be staged and then edited again. Keep both sides as leaves,
+    // but label only that exceptional pair; ordinary files stay as compact as
+    // the path tree in the commit panel is expected to be.
+    const occurrences = new Map();
+    for (const file of files) {
+      occurrences.set(file.path, (occurrences.get(file.path) || 0) + 1);
     }
+    const treeFiles = files.map((file) => ({
+      ...file,
+      treeLabel:
+        occurrences.get(file.path) > 1
+          ? `${file.path.split("/").pop()} · ${file.staged ? "已暂存" : "未暂存"}`
+          : file.path.split("/").pop(),
+    }));
+    appendChangeTreeRows(pathTree(treeFiles, false), repoTree, repo, 1, "", !!needle);
+    repoDetails.append(repoHead, repoTree);
+    repoItem.appendChild(repoDetails);
+    list.appendChild(repoItem);
   }
-  navIndex = prevKey ? navFiles.findIndex((e) => e.key === prevKey) : -1;
+  rebuildChangeNavigation(prevKey);
   applyFileSelection();
   list.scrollTop = scrollTop;
   applyBranchDirtyMark();
+}
+
+function changeTreeDetails(key, forceOpen = false) {
+  const details = document.createElement("details");
+  details.open = forceOpen || !collapsedChangeNodes.has(key);
+  details.ontoggle = () => {
+    if (!forceOpen) {
+      if (details.open) collapsedChangeNodes.delete(key);
+      else collapsedChangeNodes.add(key);
+    }
+    rebuildChangeNavigation(selectedFileKey);
+  };
+  return details;
+}
+
+function changeTreeCheckbox(files, repo) {
+  const cb = document.createElement("input");
+  cb.type = "checkbox";
+  const actionable = files.filter((f) => f.status !== "conflict");
+  const staged = actionable.filter((f) => f.staged).length;
+  cb.disabled = actionable.length === 0;
+  cb.checked = actionable.length > 0 && staged === actionable.length;
+  cb.indeterminate = staged > 0 && staged < actionable.length;
+  cb.title = cb.disabled ? "先解决冲突" : cb.checked ? "取消暂存此组" : "暂存此组";
+  cb.onclick = async (event) => {
+    event.stopPropagation();
+    const paths = [...new Set(actionable.map((f) => f.path))];
+    if (!paths.length) return;
+    cb.disabled = true;
+    try {
+      await invoke(cb.checked ? "stage_all" : "unstage_all", { path: repo, files: paths });
+      await refreshChanges();
+    } catch (e) {
+      cb.disabled = false;
+      setStatus(String(e), true);
+    }
+  };
+  return cb;
+}
+
+function appendChangeTreeRows(node, into, repo, depth, parent = "", forceOpen = false) {
+  for (const dir of node.dirs) {
+    const path = parent ? `${parent}/${dir.name}` : dir.name;
+    const item = document.createElement("li");
+    item.className = "change-tree-node";
+    const details = changeTreeDetails(`${repo.path}|dir|${path}`, forceOpen);
+    const summary = document.createElement("summary");
+    summary.className = "change-tree-row folder";
+    summary.style.paddingLeft = `${6 + depth * 14}px`;
+    const files = changeTreeFiles(dir);
+    summary.appendChild(changeTreeCheckbox(files, repo.path));
+    const icon = document.createElement("span");
+    icon.className = "tree-folder-icon";
+    const name = document.createElement("span");
+    name.className = "tree-name";
+    name.textContent = `${dir.name}  ${new Set(files.map((file) => file.path)).size} 个文件`;
+    summary.append(icon, name);
+    const children = document.createElement("ul");
+    children.className = "list";
+    appendChangeTreeRows(dir, children, repo, depth + 1, path, forceOpen);
+    details.append(summary, children);
+    item.appendChild(details);
+    into.appendChild(item);
+  }
+  for (const f of node.files) into.appendChild(changeRow(f, repo.path, depth));
+}
+
+function changeTreeFiles(node) {
+  const files = node.files.slice();
+  for (const dir of node.dirs) files.push(...changeTreeFiles(dir));
+  return files;
+}
+
+function rebuildChangeNavigation(currentKey = navFiles[navIndex]?.key ?? null) {
+  navFiles = [...document.querySelectorAll("#changes .change-item")]
+    .filter((row) => !row.closest("details:not([open])"))
+    .map((row) => row.navEntry);
+  navIndex = currentKey ? navFiles.findIndex((entry) => entry.key === currentKey) : -1;
 }
 
 /* The * on the current-branch row comes from here, but refreshChanges and
@@ -690,9 +765,10 @@ function applyBranchDirtyMark() {
   }
 }
 
-function changeRow(f, repo = repoPath, navIdx = -1) {
+function changeRow(f, repo = repoPath, depth = 0) {
   const li = document.createElement("li");
-  li.className = "change-item" + (isMulti() ? " changes-indent" : "");
+  li.className = "change-item change-tree-row file";
+  li.style.paddingLeft = `${6 + depth * 14}px`;
   li.dataset.fileKey = `${repo}|${f.path}|${f.staged}`;
   const conflict = f.status === "conflict";
 
@@ -720,7 +796,8 @@ function changeRow(f, repo = repoPath, navIdx = -1) {
 
   const name = document.createElement("span");
   name.className = "file-name";
-  name.textContent = f.path;
+  name.textContent = f.treeLabel || f.path.split("/").pop();
+  name.title = f.path;
 
   li.append(cb, badge, name);
   // Discarding restores the worktree from the index, so it means nothing on a
@@ -741,13 +818,20 @@ function changeRow(f, repo = repoPath, navIdx = -1) {
      their own click handlers — a press on them is not a press on the row. */
   li.onmousedown = (ev) => {
     if (ev.button !== 0 || ev.target.closest("input, button")) return;
-    navIndex = navIdx; // clicking a file is where ↑/↓ continues from
+    rebuildChangeNavigation(li.dataset.fileKey);
     selectFileRow(li.dataset.fileKey);
     return conflict ? showConflict(f.path, repo) : showDiff(f.path, f.staged, repo);
   };
   li.oncontextmenu = (e) => {
     e.preventDefault();
     showMenu(e.clientX, e.clientY, fileMenuItems(f.path, !f.staged && !conflict, repo));
+  };
+  li.navEntry = {
+    // The key distinguishes the staged and unstaged rows of one path.
+    key: li.dataset.fileKey,
+    label: (isMulti() ? `${repoName(repo)}/` : "") + f.path,
+    open: () =>
+      conflict ? showConflict(f.path, repo) : showDiff(f.path, f.staged, repo),
   };
   return li;
 }

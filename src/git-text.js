@@ -430,11 +430,11 @@ export function credentialAction(info, username, token) {
 
 /* ---------- folder tree (push dialog) ---------- */
 
-/** Groups `{path, status}` entries into a folder tree: folders sort before
-    files, a folder that holds nothing but one folder collapses into a single
-    row ("app/api/v1"), and every folder carries the number of files under it.
+/** Groups `{path, status}` entries into a folder tree. Folders sort before
+    files and carry the number of files below them. Single-child folder chains
+    collapse by default; interactive callers can keep every level visible.
     The root keeps an empty name — the caller labels it with the repo name. */
-export function pathTree(files) {
+export function pathTree(files, collapseSingleChild = true) {
   const root = { name: "", dirs: new Map(), files: [] };
   for (const f of files) {
     const parts = String(f.path).split("/");
@@ -445,18 +445,23 @@ export function pathTree(files) {
     }
     node.files.push(f);
   }
-  return closeTree(root);
+  return closeTree(root, collapseSingleChild);
 }
 
-function closeTree(node) {
+function closeTree(node, collapseSingleChild) {
   // Collapse a chain of single-child folders into one row. The root is exempt:
   // it is the repo, and swallowing "app" into it would hide a real folder.
-  while (node.name !== "" && node.files.length === 0 && node.dirs.size === 1) {
+  while (
+    collapseSingleChild &&
+    node.name !== "" &&
+    node.files.length === 0 &&
+    node.dirs.size === 1
+  ) {
     const only = [...node.dirs.values()][0];
     node = { name: `${node.name}/${only.name}`, dirs: only.dirs, files: only.files };
   }
   const dirs = [...node.dirs.values()]
-    .map(closeTree)
+    .map((dir) => closeTree(dir, collapseSingleChild))
     .sort((a, b) => a.name.localeCompare(b.name));
   const byName = (a, b) => a.path.localeCompare(b.path);
   const own = node.files.slice().sort(byName);

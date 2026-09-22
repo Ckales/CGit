@@ -1,7 +1,19 @@
+# Dart / Flutter 构建产物
 .dart_tool/
 build/
 .packages
-pubspec.lock
-# flutter create 生成的平台壳，不入库
-macos/
-web/
+.flutter-plugins-dependencies
+
+# Rust 构建产物（cargokit 自带的 .gitignore 管它自己那份）
+rust/target/
+
+# IDE
+*.iml
+.idea/
+
+# 注意：macos/ 必须入库。
+# 它不只是 `flutter create` 的产物——macos/Runner/*.entitlements 里关闭了
+# App Sandbox，没有这一改动 app 起得来但读不到任何仓库数据。macos/.gitignore
+# 已经排除了 ephemeral/ Pods/ xcuserdata/ 这些真正的生成物。
+#
+# pubspec.lock 也入库：这是应用不是库，锁定版本才能复现构建。

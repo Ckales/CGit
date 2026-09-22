@@ -169,7 +169,11 @@ class _HunkViewState extends State<_HunkView> {
   }
 
   List<Widget> _unifiedRows(Palette palette, bool interactive) {
-    final lines = widget.hunk.replaceFirst(RegExp(r'\n$'), '').split('\n').skip(1).toList();
+    final lines = widget.hunk
+        .replaceFirst(RegExp(r'\n$'), '')
+        .split('\n')
+        .skip(1)
+        .toList();
     final rows = <Widget>[];
 
     for (var i = 0; i < lines.length; i++) {
@@ -440,7 +444,8 @@ class _HatchPainter extends CustomPainter {
       ..color = color
       ..strokeWidth = 4;
     for (var x = -size.height; x < size.width; x += 8) {
-      canvas.drawLine(Offset(x, size.height), Offset(x + size.height, 0), paint);
+      canvas.drawLine(
+          Offset(x, size.height), Offset(x + size.height, 0), paint);
     }
   }
 

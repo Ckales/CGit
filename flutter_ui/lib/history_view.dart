@@ -198,14 +198,16 @@ class _LanePainter extends CustomPainter {
       stroke.color = _color(col);
       canvas.drawLine(Offset(_x(col), 0), Offset(_x(col), mid), stroke);
       if (col < row.outgoing.length && row.outgoing[col] != null) {
-        canvas.drawLine(Offset(_x(col), mid), Offset(_x(col), size.height), stroke);
+        canvas.drawLine(
+            Offset(_x(col), mid), Offset(_x(col), size.height), stroke);
       }
     }
 
     // Incoming edge for this commit's own lane.
     if (row.myCol < row.incoming.length && row.incoming[row.myCol] != null) {
       stroke.color = _color(row.myCol);
-      canvas.drawLine(Offset(_x(row.myCol), 0), Offset(_x(row.myCol), mid), stroke);
+      canvas.drawLine(
+          Offset(_x(row.myCol), 0), Offset(_x(row.myCol), mid), stroke);
     }
 
     // Down to each parent. A parent in another lane gets a curve rather than a
@@ -219,9 +221,12 @@ class _LanePainter extends CustomPainter {
         final path = Path()
           ..moveTo(_x(row.myCol), mid)
           ..cubicTo(
-            _x(row.myCol), mid + size.height * 0.35,
-            _x(pc), mid + size.height * 0.15,
-            _x(pc), size.height,
+            _x(row.myCol),
+            mid + size.height * 0.35,
+            _x(pc),
+            mid + size.height * 0.15,
+            _x(pc),
+            size.height,
           );
         canvas.drawPath(path, stroke);
       }
@@ -240,5 +245,6 @@ class _LanePainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_LanePainter old) => old.row != row || old.palette != palette;
+  bool shouldRepaint(_LanePainter old) =>
+      old.row != row || old.palette != palette;
 }

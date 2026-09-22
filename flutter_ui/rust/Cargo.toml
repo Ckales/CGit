@@ -1,0 +1,15 @@
+[package]
+name = "cgit_rust"
+version = "0.1.0"
+description = "flutter_rust_bridge surface over cgit-core"
+authors = ["Ckales"]
+license = "MIT"
+edition = "2021"
+rust-version = "1.95"
+
+[lib]
+crate-type = ["staticlib", "cdylib", "lib"]
+
+[dependencies]
+cgit-core = { path = "../../crates/cgit-core" }
+flutter_rust_bridge = "=2.13.0"

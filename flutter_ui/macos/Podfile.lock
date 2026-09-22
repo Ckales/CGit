@@ -1,0 +1,22 @@
+PODS:
+  - cgit_rust (0.0.1):
+    - FlutterMacOS
+  - FlutterMacOS (1.0.0)
+
+DEPENDENCIES:
+  - cgit_rust (from `Flutter/ephemeral/.symlinks/plugins/cgit_rust/macos`)
+  - FlutterMacOS (from `Flutter/ephemeral`)
+
+EXTERNAL SOURCES:
+  cgit_rust:
+    :path: Flutter/ephemeral/.symlinks/plugins/cgit_rust/macos
+  FlutterMacOS:
+    :path: Flutter/ephemeral
+
+SPEC CHECKSUMS:
+  cgit_rust: f13755f549a80d76285c7e5e7eefae5d78a9e3e7
+  FlutterMacOS: c232990155153907050900a2e175c7773903ba4e
+
+PODFILE CHECKSUM: 1e95c36afbfd1cb6423ceca4de7a8e1b256fb6ac
+
+COCOAPODS: 1.17.0

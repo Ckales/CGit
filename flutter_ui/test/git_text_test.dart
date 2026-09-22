@@ -12,7 +12,8 @@ void main() {
       expect(selectableLines(hunk), [1, 2, 3]);
     });
 
-    test('staging one addition drops the other and neutralises the deletion', () {
+    test('staging one addition drops the other and neutralises the deletion',
+        () {
       expect(
         buildPartialHunk(hunk, {2}),
         ['@@ -1,3 +1,4 @@ fn main', ' a', ' b', '+B', ' d', ''].join('\n'),
@@ -37,7 +38,8 @@ void main() {
       ]) {
         final patch = buildPartialHunk(hunk, sel)!;
         final lines = patch.replaceFirst(RegExp(r'\n$'), '').split('\n');
-        final m = RegExp(r'^@@ -\d+,(\d+) \+\d+,(\d+) @@').firstMatch(lines.first)!;
+        final m =
+            RegExp(r'^@@ -\d+,(\d+) \+\d+,(\d+) @@').firstMatch(lines.first)!;
         final body = lines.sublist(1);
         final oldSide =
             body.where((l) => l.startsWith(' ') || l.startsWith('-')).length;
@@ -60,15 +62,13 @@ void main() {
     test('keeps the no-newline marker with its line', () {
       // Marker after the old last line: that line is emitted either as "-a"
       // (selected) or as context " a" (not), so the marker travels with it.
-      const oldSide =
-          '@@ -1 +1 @@\n-a\n\\ No newline at end of file\n+b\n';
+      const oldSide = '@@ -1 +1 @@\n-a\n\\ No newline at end of file\n+b\n';
       expect(buildPartialHunk(oldSide, {0}), contains('-a\n\\ No newline'));
       expect(buildPartialHunk(oldSide, {2}), contains(' a\n\\ No newline'));
 
       // Marker after an added line: dropping that addition must drop the
       // marker, or the patch claims a no-newline state for the line above.
-      const newSide =
-          '@@ -1 +1 @@\n-a\n+b\n\\ No newline at end of file\n';
+      const newSide = '@@ -1 +1 @@\n-a\n+b\n\\ No newline at end of file\n';
       expect(buildPartialHunk(newSide, {1}), contains('\\ No newline'));
       expect(buildPartialHunk(newSide, {0}), isNot(contains('\\ No newline')));
     });
@@ -103,9 +103,11 @@ void main() {
     });
 
     test('aligns deletions against additions and numbers both sides', () {
-      final rows = pairHunkLines('@@ -10,3 +20,3 @@\n keep\n-old\n+new\n tail\n')!.rows;
+      final rows =
+          pairHunkLines('@@ -10,3 +20,3 @@\n keep\n-old\n+new\n tail\n')!.rows;
       expect(
-        rows.map((r) => [r.type, r.left?.no, r.left?.text, r.right?.no, r.right?.text]),
+        rows.map((r) =>
+            [r.type, r.left?.no, r.left?.text, r.right?.no, r.right?.text]),
         [
           [RowType.ctx, 10, 'keep', 20, 'keep'],
           [RowType.mod, 11, 'old', 21, 'new'],
@@ -117,7 +119,8 @@ void main() {
     test('leaves the opposite cell empty for unbalanced runs', () {
       final rows = pairHunkLines('@@ -1,3 +1,2 @@\n-a\n-b\n+A\n c\n')!.rows;
       expect(rows.map((r) => r.type), [RowType.mod, RowType.del, RowType.ctx]);
-      expect(rows[1].right, isNull, reason: 'second deletion has no counterpart');
+      expect(rows[1].right, isNull,
+          reason: 'second deletion has no counterpart');
       // Numbering must not advance on the side that has no line.
       expect(
         rows.map((r) => [r.left?.no, r.right?.no]),
@@ -151,7 +154,8 @@ void main() {
       const b = '【UniFly萤火虫】令牌变更通11知 · {令牌名称}';
       final d = intraLineDiff(a, b)!;
       expect(d.left.mid, '', reason: 'nothing was removed');
-      expect(d.right.mid, '11', reason: 'only the inserted text is highlighted');
+      expect(d.right.mid, '11',
+          reason: 'only the inserted text is highlighted');
       expect(d.left.prefix, d.right.prefix);
       expect(d.left.suffix, d.right.suffix);
       // Reassembling each side must give back the original line.
@@ -179,7 +183,8 @@ void main() {
 
       for (final part in [d.left, d.right]) {
         for (final piece in [part.prefix, part.mid, part.suffix]) {
-          expect(_wellFormed(piece), isTrue, reason: 'broken UTF-16 in "$piece"');
+          expect(_wellFormed(piece), isTrue,
+              reason: 'broken UTF-16 in "$piece"');
         }
       }
     });
@@ -214,7 +219,9 @@ void main() {
     });
 
     test('tolerates parents outside the loaded page', () {
-      final layout = layoutGraph([_c('x', ['missing'])]);
+      final layout = layoutGraph([
+        _c('x', ['missing'])
+      ]);
       expect(layout.rows[0].myCol, 0);
       expect(layout.rows[0].outgoing, ['missing']);
     });

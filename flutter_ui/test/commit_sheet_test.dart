@@ -26,8 +26,8 @@ Widget _host(Widget child) => MaterialApp(
 CommitSheet _sheet({List<FileStatus>? changes}) => CommitSheet(
       changes: changes ??
           const [
-            FileStatus('src/main.js', 'M', true),
-            FileStatus('src/styles.css', 'M', false),
+            FileStatus(path: 'src/main.js', status: 'M', staged: true),
+            FileStatus(path: 'src/styles.css', status: 'M', staged: false),
           ],
       git: Git('/tmp'),
       onClose: () {},
@@ -58,7 +58,8 @@ void main() {
     expect(find.text('修复提交弹窗缺少输入框'), findsOneWidget);
   });
 
-  testWidgets('staged and unstaged files are grouped and counted', (tester) async {
+  testWidgets('staged and unstaged files are grouped and counted',
+      (tester) async {
     await tester.pumpWidget(_host(_sheet()));
 
     expect(find.text('已暂存 (1)'), findsOneWidget);
@@ -80,7 +81,7 @@ void main() {
 
   testWidgets('committing with nothing staged is refused', (tester) async {
     await tester.pumpWidget(_host(_sheet(
-      changes: const [FileStatus('src/main.js', 'M', false)],
+      changes: const [FileStatus(path: 'src/main.js', status: 'M', staged: false)],
     )));
 
     await tester.enterText(find.byType(TextField), '一些改动');

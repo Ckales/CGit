@@ -1,8 +1,10 @@
-/* Which data source the build gets.
+/* The single data path: every Git call goes through cgit-core over
+   flutter_rust_bridge, the same crate src-tauri calls.
 
-   The macOS desktop build has dart:io and talks to the git CLI; the web build
-   (flutter run -d chrome, for looking at the UI without Xcode) gets fixtures.
-   Everything else imports this file and never knows which one it got. */
+   There used to be a conditional export here picking between a Dart-side git
+   CLI wrapper and a browser fixture. Both are gone: they were second
+   implementations of rules that already live in cgit-core, and keeping a
+   parallel set of fixtures in step with 81 commands would have cost more than
+   the Xcode-free preview was worth. `git log` has them if that changes. */
 
-export 'git_types.dart';
-export 'git_web.dart' if (dart.library.io) 'git_io.dart';
+export 'git_frb.dart';

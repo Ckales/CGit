@@ -14,7 +14,8 @@ Widget _host(Widget child) => MaterialApp(
     );
 
 void main() {
-  testWidgets('split view numbers both sides and keeps the hunk header', (tester) async {
+  testWidgets('split view numbers both sides and keeps the hunk header',
+      (tester) async {
     await tester.pumpWidget(_host(
       const DiffPane(hunks: [hunk], mode: DiffMode.split),
     ));
@@ -22,10 +23,12 @@ void main() {
     expect(find.text('@@ -1,3 +1,4 @@ fn main'), findsOneWidget);
     // Old side runs 1..3 (a, b, d); new side 1..4 (a, B, c, d). The add row
     // must leave the left cell — and its number — empty.
-    expect(find.text('4'), findsOneWidget, reason: 'only the new side reaches 4');
+    expect(find.text('4'), findsOneWidget,
+        reason: 'only the new side reaches 4');
   });
 
-  testWidgets('clicking a modified row selects both halves and stages exactly them',
+  testWidgets(
+      'clicking a modified row selects both halves and stages exactly them',
       (tester) async {
     String? patch;
     bool? reverse;
@@ -100,7 +103,8 @@ void main() {
     expect(find.text('+c'), findsOneWidget);
   });
 
-  testWidgets('an empty patch says so instead of rendering nothing', (tester) async {
+  testWidgets('an empty patch says so instead of rendering nothing',
+      (tester) async {
     await tester.pumpWidget(_host(
       const DiffPane(hunks: [], mode: DiffMode.split),
     ));

@@ -1,0 +1,17 @@
+[package]
+name = "cgit-core"
+version = "0.1.0"
+description = "Git logic for CGit — shared by the Tauri and Flutter frontends"
+authors = ["Ckales"]
+license = "MIT"
+edition = "2021"
+rust-version = "1.95"
+
+[lib]
+name = "cgit_core"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+gix = { version = "0.87", features = ["blame", "status", "parallel", "max-performance"] }
+notify = "6"

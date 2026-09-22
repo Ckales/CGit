@@ -8,10 +8,14 @@ import 'git_text.dart';
 import 'history_view.dart';
 import 'theme.dart';
 
-void main(List<String> args) {
+Future<void> main(List<String> args) async {
+  // The Rust side lives in cgit_rust.framework; nothing below can call it until
+  // this resolves, so it blocks rather than racing the first repo load.
+  WidgetsFlutterBinding.ensureInitialized();
+  await initGitBridge();
+
   // The repo comes from argv so the app has something to show without a file
-  // picker. Opening a folder needs the file_selector plugin, which drags in
-  // CocoaPods — see README.
+  // picker. Opening a folder needs the file_selector plugin — see README.
   runApp(CGitApp(startPath: args.isEmpty ? defaultRepoPath : args.first));
 }
 
@@ -43,7 +47,8 @@ class _CGitAppState extends State<CGitApp> {
           child: RepoScreen(
             startPath: widget.startPath,
             onToggleTheme: () => setState(
-              () => _palette = _palette == Palette.dark ? Palette.light : Palette.dark,
+              () => _palette =
+                  _palette == Palette.dark ? Palette.light : Palette.dark,
             ),
           ),
         ),
@@ -76,7 +81,8 @@ class CommitFileDiff extends DiffTarget {
 }
 
 class RepoScreen extends StatefulWidget {
-  const RepoScreen({super.key, required this.startPath, required this.onToggleTheme});
+  const RepoScreen(
+      {super.key, required this.startPath, required this.onToggleTheme});
   final String startPath;
   final VoidCallback onToggleTheme;
 
@@ -92,12 +98,12 @@ class _RepoScreenState extends State<RepoScreen> {
 
   List<BranchInfo> _branches = const [];
   List<String> _tags = const [];
-  List<String> _remotes = const [];
+  List<RemoteInfo> _remotes = const [];
   List<FileStatus> _changes = const [];
   GraphLayout _graph = const GraphLayout([], 1);
 
   GraphCommit? _selectedCommit;
-  List<String> _commitFiles = const [];
+  List<FileStatus> _commitFiles = const [];
   DiffTarget _target = const NoDiff();
   List<String> _hunks = const [];
 
@@ -122,14 +128,17 @@ class _RepoScreenState extends State<RepoScreen> {
   }
 
   Future<void> _openRepo(String path) async {
-    final root = await Git.discoverRoot(path);
-    if (root == null) {
+    final workspace = await Git.discover(path);
+    if (workspace == null || workspace.repos.isEmpty) {
       setState(() => _status = '不是 Git 仓库：$path');
       return;
     }
+    // A workspace can hold sibling repos; the sidebar picker for those is not
+    // built yet, so open the first and keep the rest for when it is.
+    final repo = workspace.repos.first;
     setState(() {
-      _git = Git(root);
-      _repoName = root.split('/').last;
+      _git = Git(repo.path);
+      _repoName = repo.name;
     });
     await _refresh();
   }
@@ -154,7 +163,7 @@ class _RepoScreenState extends State<RepoScreen> {
         _branch = results[0] as String;
         _branches = results[1] as List<BranchInfo>;
         _tags = results[2] as List<String>;
-        _remotes = results[3] as List<String>;
+        _remotes = results[3] as List<RemoteInfo>;
         _changes = results[4] as List<FileStatus>;
         _graph = layoutGraph(results[5] as List<GraphCommit>);
         _status = '就绪';
@@ -170,10 +179,16 @@ class _RepoScreenState extends State<RepoScreen> {
     if (git == null) return;
     try {
       final hunks = switch (_target) {
-        NoDiff() => const Hunks('', []),
+        NoDiff() => const Hunks(header: '', hunks: []),
         WorkingFileDiff(:final path, :final staged) =>
           await git.hunks(path, staged: staged),
-        CommitFileDiff(:final oid, :final path) => await git.commitDiff(oid, path),
+        CommitFileDiff(:final oid, :final path) =>
+          // A commit's diff comes back as one patch; core hands the working-tree
+          // diff back pre-split, so only this path needs splitting.
+          Hunks(
+            header: '',
+            hunks: splitPatchText(await git.commitDiff(oid, path)).hunks,
+          ),
       };
       if (mounted) setState(() => _hunks = hunks.hunks);
     } on GitError catch (e) {
@@ -198,7 +213,9 @@ class _RepoScreenState extends State<RepoScreen> {
       if (!mounted) return;
       setState(() {
         _commitFiles = files;
-        _target = files.isEmpty ? const NoDiff() : CommitFileDiff(commit.id, files.first);
+        _target = files.isEmpty
+            ? const NoDiff()
+            : CommitFileDiff(commit.id, files.first.path);
       });
       await _reloadDiff();
     } on GitError catch (e) {
@@ -210,7 +227,7 @@ class _RepoScreenState extends State<RepoScreen> {
     final git = _git;
     if (git == null) return;
     try {
-      await git.applyPatch(patch, reverse: reverse);
+      await git.applyHunk(patch, reverse: reverse);
       setState(() => _status = reverse ? '已取消暂存所选行' : '已暂存所选行');
       await _refresh();
     } on GitError catch (e) {
@@ -250,8 +267,8 @@ class _RepoScreenState extends State<RepoScreen> {
                           _Splitter(
                             axis: Axis.horizontal,
                             palette: p,
-                            onDrag: (d) => setState(() =>
-                                _sidebarWidth = (_sidebarWidth + d).clamp(140.0, 480.0)),
+                            onDrag: (d) => setState(() => _sidebarWidth =
+                                (_sidebarWidth + d).clamp(140.0, 480.0)),
                             onReset: () => setState(() => _sidebarWidth = 220),
                           ),
                           Expanded(child: _mainRight(p)),
@@ -290,15 +307,18 @@ class _RepoScreenState extends State<RepoScreen> {
           Text(_git == null ? '未打开仓库' : '$_repoName — $_branch',
               style: ui.copyWith(color: p.textDim)),
           const Spacer(),
-          _ToolButton(label: '提交', enabled: _git != null, onTap: () {
-            setState(() => _commitOpen = true);
-          }),
+          _ToolButton(
+              label: '提交',
+              enabled: _git != null,
+              onTap: () {
+                setState(() => _commitOpen = true);
+              }),
           _ToolButton(label: '刷新', enabled: _git != null, onTap: _refresh),
           _ToolButton(
             label: _mode == DiffMode.split ? '并排' : '统一',
             enabled: true,
-            onTap: () => setState(() =>
-                _mode = _mode == DiffMode.split ? DiffMode.unified : DiffMode.split),
+            onTap: () => setState(() => _mode =
+                _mode == DiffMode.split ? DiffMode.unified : DiffMode.split),
           ),
           _ToolButton(label: '主题', enabled: true, onTap: widget.onToggleTheme),
         ],
@@ -324,7 +344,7 @@ class _RepoScreenState extends State<RepoScreen> {
               leading: b.isCurrent ? '●' : null,
             ),
           _SectionHead(label: '远端', palette: p),
-          for (final r in _remotes) _SidebarRow(label: r, palette: p),
+          for (final r in _remotes) _SidebarRow(label: r.name, palette: p),
           _SectionHead(label: '标签', palette: p),
           for (final t in _tags) _SidebarRow(label: t, palette: p),
           _SectionHead(label: '改动', palette: p),
@@ -368,8 +388,8 @@ class _RepoScreenState extends State<RepoScreen> {
         _Splitter(
           axis: Axis.vertical,
           palette: p,
-          onDrag: (d) =>
-              setState(() => _historyHeight = (_historyHeight + d).clamp(80.0, 700.0)),
+          onDrag: (d) => setState(
+              () => _historyHeight = (_historyHeight + d).clamp(80.0, 700.0)),
           onReset: () => setState(() => _historyHeight = 260),
         ),
         Expanded(child: _diffPane(p)),
@@ -380,7 +400,8 @@ class _RepoScreenState extends State<RepoScreen> {
   Widget _diffPane(Palette p) {
     final title = switch (_target) {
       NoDiff() => '差异',
-      WorkingFileDiff(:final path, :final staged) => '$path${staged ? '（已暂存）' : ''}',
+      WorkingFileDiff(:final path, :final staged) =>
+        '$path${staged ? '（已暂存）' : ''}',
       CommitFileDiff(:final path) => path,
     };
     final staged = switch (_target) {
@@ -406,15 +427,19 @@ class _RepoScreenState extends State<RepoScreen> {
                       children: [
                         for (final f in _commitFiles)
                           _SidebarRow(
-                            label: f,
+                            label: f.path,
+                            // Core reports each file's status in the commit,
+                            // so the list can say added / modified / deleted.
+                            leading: f.status,
+                            leadingColor: p.textDim,
                             palette: p,
                             active: switch (_target) {
-                              CommitFileDiff(:final path) => path == f,
+                              CommitFileDiff(:final path) => path == f.path,
                               _ => false,
                             },
                             onTap: () async {
-                              setState(() =>
-                                  _target = CommitFileDiff(_selectedCommit!.id, f));
+                              setState(() => _target =
+                                  CommitFileDiff(_selectedCommit!.id, f.path));
                               await _reloadDiff();
                             },
                           ),
@@ -471,7 +496,9 @@ class _Splitter extends StatelessWidget {
   Widget build(BuildContext context) {
     final horizontal = axis == Axis.horizontal;
     return MouseRegion(
-      cursor: horizontal ? SystemMouseCursors.resizeColumn : SystemMouseCursors.resizeRow,
+      cursor: horizontal
+          ? SystemMouseCursors.resizeColumn
+          : SystemMouseCursors.resizeRow,
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onDoubleTap: onReset,
@@ -488,7 +515,8 @@ class _Splitter extends StatelessWidget {
 }
 
 class _ToolButton extends StatefulWidget {
-  const _ToolButton({required this.label, required this.enabled, required this.onTap});
+  const _ToolButton(
+      {required this.label, required this.enabled, required this.onTap});
   final String label;
   final bool enabled;
   final VoidCallback onTap;
@@ -504,7 +532,8 @@ class _ToolButtonState extends State<_ToolButton> {
   Widget build(BuildContext context) {
     final p = Theming.of(context);
     return MouseRegion(
-      cursor: widget.enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
+      cursor:
+          widget.enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
       child: GestureDetector(
@@ -538,7 +567,8 @@ class _SectionHead extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(10, 10, 10, 4),
       child: Text(
         label,
-        style: ui.copyWith(color: palette.textDim, fontSize: 11, letterSpacing: 0.4),
+        style: ui.copyWith(
+            color: palette.textDim, fontSize: 11, letterSpacing: 0.4),
       ),
     );
   }
@@ -598,7 +628,9 @@ class _SidebarRowState extends State<_SidebarRow> {
   Widget build(BuildContext context) {
     final p = widget.palette;
     return MouseRegion(
-      cursor: widget.onTap == null ? SystemMouseCursors.basic : SystemMouseCursors.click,
+      cursor: widget.onTap == null
+          ? SystemMouseCursors.basic
+          : SystemMouseCursors.click,
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
       child: GestureDetector(

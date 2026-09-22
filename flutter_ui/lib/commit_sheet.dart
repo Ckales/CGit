@@ -38,8 +38,10 @@ class _CommitSheetState extends State<CommitSheet> {
     super.dispose();
   }
 
-  List<FileStatus> get _staged => widget.changes.where((f) => f.staged).toList();
-  List<FileStatus> get _unstaged => widget.changes.where((f) => !f.staged).toList();
+  List<FileStatus> get _staged =>
+      widget.changes.where((f) => f.staged).toList();
+  List<FileStatus> get _unstaged =>
+      widget.changes.where((f) => !f.staged).toList();
 
   Future<void> _run(Future<void> Function() action) async {
     setState(() {
@@ -107,7 +109,8 @@ class _CommitSheetState extends State<CommitSheet> {
                         onTap: widget.onClose,
                         child: MouseRegion(
                           cursor: SystemMouseCursors.click,
-                          child: Text('✕', style: ui.copyWith(color: p.textDim)),
+                          child:
+                              Text('✕', style: ui.copyWith(color: p.textDim)),
                         ),
                       ),
                     ],
@@ -117,17 +120,21 @@ class _CommitSheetState extends State<CommitSheet> {
                   child: ListView(
                     padding: const EdgeInsets.only(bottom: 8),
                     children: [
-                      _group(p, '已暂存 (${_staged.length})', _staged, staged: true),
-                      _group(p, '未暂存 (${_unstaged.length})', _unstaged, staged: false),
+                      _group(p, '已暂存 (${_staged.length})', _staged,
+                          staged: true),
+                      _group(p, '未暂存 (${_unstaged.length})', _unstaged,
+                          staged: false),
                     ],
                   ),
                 ),
                 if (_error != null)
                   Container(
                     width: double.infinity,
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                     color: p.red.withValues(alpha: 0.15),
-                    child: Text(_error!, style: ui.copyWith(color: p.red, fontSize: 11)),
+                    child: Text(_error!,
+                        style: ui.copyWith(color: p.red, fontSize: 11)),
                   ),
                 Container(
                   padding: const EdgeInsets.all(10),
@@ -144,7 +151,8 @@ class _CommitSheetState extends State<CommitSheet> {
                           border: Border.all(color: p.border),
                           borderRadius: BorderRadius.circular(4),
                         ),
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 4),
                         child: TextField(
                           controller: _message,
                           maxLines: null,
@@ -179,13 +187,15 @@ class _CommitSheetState extends State<CommitSheet> {
     );
   }
 
-  Widget _group(Palette p, String title, List<FileStatus> files, {required bool staged}) {
+  Widget _group(Palette p, String title, List<FileStatus> files,
+      {required bool staged}) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Container(
           padding: const EdgeInsets.fromLTRB(10, 8, 10, 4),
-          child: Text(title, style: ui.copyWith(color: p.textDim, fontSize: 11)),
+          child:
+              Text(title, style: ui.copyWith(color: p.textDim, fontSize: 11)),
         ),
         for (final f in files)
           _FileRow(
@@ -194,8 +204,9 @@ class _CommitSheetState extends State<CommitSheet> {
             actionLabel: staged ? '−' : '＋',
             onAction: _busy
                 ? null
-                : () => _run(() =>
-                    staged ? widget.git.unstage(f.path) : widget.git.stage(f.path)),
+                : () => _run(() => staged
+                    ? widget.git.unstage(f.path)
+                    : widget.git.stage(f.path)),
             onTap: () => widget.onPickFile(f),
           ),
       ],
@@ -282,7 +293,8 @@ class _FileRowState extends State<_FileRow> {
 }
 
 class _Button extends StatefulWidget {
-  const _Button({required this.label, required this.onTap, this.primary = false});
+  const _Button(
+      {required this.label, required this.onTap, this.primary = false});
   final String label;
   final VoidCallback? onTap;
   final bool primary;

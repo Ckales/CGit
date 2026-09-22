@@ -7,8 +7,11 @@ environment:
   sdk: ^3.5.0
 
 dependencies:
+  cgit_rust:
+    path: rust_builder
   flutter:
     sdk: flutter
+  flutter_rust_bridge: 2.13.0
 
 dev_dependencies:
   flutter_test:

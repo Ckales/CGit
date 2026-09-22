@@ -1,3 +1,7 @@
+import 'src/rust/api/git.dart' show GraphCommit;
+
+export 'src/rust/api/git.dart' show GraphCommit;
+
 /* Port of src/git-text.js. Pure text/graph helpers, free of Flutter imports so
    they can be unit-tested with `flutter test` — same reason the JS version
    stays free of DOM and Tauri imports. These are the functions that silently
@@ -84,7 +88,8 @@ String? buildPartialHunk(String hunk, Set<int> keep) {
 
 /// Body-line indices of a hunk that are selectable (i.e. +/- lines).
 List<int> selectableLines(String hunk) {
-  final body = hunk.replaceFirst(RegExp(r'\n$'), '').split('\n').skip(1).toList();
+  final body =
+      hunk.replaceFirst(RegExp(r'\n$'), '').split('\n').skip(1).toList();
   final out = <int>[];
   for (var i = 0; i < body.length; i++) {
     if (body[i].startsWith('+') || body[i].startsWith('-')) out.add(i);
@@ -223,7 +228,9 @@ PairedHunk? pairHunkLines(String hunk) {
       if (d != null) picks.add(d.idx);
       if (a != null) picks.add(a.idx);
       rows.add(DiffRow(
-        d != null && a != null ? RowType.mod : (d != null ? RowType.del : RowType.add),
+        d != null && a != null
+            ? RowType.mod
+            : (d != null ? RowType.del : RowType.add),
         d == null ? null : DiffCell(oldNo++, d.text),
         a == null ? null : DiffCell(newNo++, a.text),
         picks,
@@ -281,25 +288,9 @@ IntraDiff? intraLineDiff(String a, String b) {
 
 /* ---------- history DAG layout ---------- */
 
-class GraphCommit {
-  const GraphCommit({
-    required this.id,
-    required this.summary,
-    required this.author,
-    required this.time,
-    required this.parents,
-    required this.refs,
-  });
-  final String id;
-  final String summary;
-  final String author;
-  final int time;
-  final List<String> parents;
-  final List<String> refs;
-}
-
 class GraphRow {
-  const GraphRow(this.commit, this.myCol, this.incoming, this.outgoing, this.parentCols);
+  const GraphRow(
+      this.commit, this.myCol, this.incoming, this.outgoing, this.parentCols);
   final GraphCommit commit;
   final int myCol;
   final List<String?> incoming;
@@ -314,6 +305,10 @@ class GraphLayout {
 }
 
 /// Assign each commit a lane (column) and record incoming/outgoing lane state.
+///
+/// Takes the same GraphCommit cgit-core returns, rather than a local copy of
+/// the shape: two structurally identical types would drift the moment core
+/// grows a field.
 GraphLayout layoutGraph(List<GraphCommit> commits) {
   final lanes = <String?>[]; // lanes[col] = oid expected next in that column
   final rows = <GraphRow>[];
@@ -361,7 +356,8 @@ GraphLayout layoutGraph(List<GraphCommit> commits) {
       lanes.removeLast();
     }
 
-    rows.add(GraphRow(c, myCol, incoming, List<String?>.from(lanes), parentCols));
+    rows.add(
+        GraphRow(c, myCol, incoming, List<String?>.from(lanes), parentCols));
   }
 
   var width = 1;
@@ -370,4 +366,298 @@ GraphLayout layoutGraph(List<GraphCommit> commits) {
     if (r.outgoing.length > width) width = r.outgoing.length;
   }
   return GraphLayout(rows, width);
+}
+
+/* ---------- conflict markers ---------- */
+
+enum BlockType { ctx, conflict }
+
+/// One block of a conflicted file: either plain context, or a conflict with the
+/// two (or three) sides git recorded.
+class ConflictBlock {
+  ConflictBlock.context(this.lines)
+      : type = BlockType.ctx,
+        ours = const [],
+        base = const [],
+        theirs = const [];
+
+  ConflictBlock.conflict({
+    required this.ours,
+    required this.base,
+    required this.theirs,
+  })  : type = BlockType.conflict,
+        lines = const [];
+
+  final BlockType type;
+  final List<String> lines;
+  final List<String> ours;
+  final List<String> base;
+  final List<String> theirs;
+
+  /// Which side the user picked: null (default to ours), 'ours', 'theirs',
+  /// 'both', or 'none' when both sides are rejected.
+  String? resolution;
+
+  /// Hand-edited replacement text. Wins over [resolution] — the merge window's
+  /// middle column is editable, for context blocks as well as conflicts.
+  String? edited;
+}
+
+class ParsedConflicts {
+  const ParsedConflicts(this.blocks, this.hasConflict);
+  final List<ConflictBlock> blocks;
+  final bool hasConflict;
+}
+
+/// Split a file containing conflict markers into context and conflict blocks.
+ParsedConflicts parseConflicts(String text) {
+  final lines = text.split('\n');
+  final blocks = <ConflictBlock>[];
+  var ctx = <String>[];
+  var hasConflict = false;
+  var i = 0;
+
+  void flushCtx() {
+    if (ctx.isNotEmpty) {
+      blocks.add(ConflictBlock.context(ctx));
+      ctx = <String>[];
+    }
+  }
+
+  while (i < lines.length) {
+    if (lines[i].startsWith('<<<<<<<')) {
+      hasConflict = true;
+      flushCtx();
+      i++;
+      final ours = <String>[];
+      while (i < lines.length &&
+          !lines[i].startsWith('|||||||') &&
+          !lines[i].startsWith('=======')) {
+        ours.add(lines[i]);
+        i++;
+      }
+      final base = <String>[];
+      if (i < lines.length && lines[i].startsWith('|||||||')) {
+        i++;
+        while (i < lines.length && !lines[i].startsWith('=======')) {
+          base.add(lines[i]);
+          i++;
+        }
+      }
+      if (i < lines.length && lines[i].startsWith('=======')) i++;
+      final theirs = <String>[];
+      while (i < lines.length && !lines[i].startsWith('>>>>>>>')) {
+        theirs.add(lines[i]);
+        i++;
+      }
+      if (i < lines.length && lines[i].startsWith('>>>>>>>')) i++;
+      blocks
+          .add(ConflictBlock.conflict(ours: ours, base: base, theirs: theirs));
+    } else {
+      ctx.add(lines[i]);
+      i++;
+    }
+  }
+  flushCtx();
+  return ParsedConflicts(blocks, hasConflict);
+}
+
+/// Rebuild file content from blocks, applying each block's chosen resolution.
+///
+/// The common ancestor is never written out: it is context for the human, not
+/// a side that can be picked.
+String assembleConflict(List<ConflictBlock> blocks) {
+  final out = <String>[];
+  for (final b in blocks) {
+    if (b.edited != null) {
+      out.addAll(b.edited!.split('\n'));
+    } else if (b.type == BlockType.ctx) {
+      out.addAll(b.lines);
+    } else if (b.resolution == 'none') {
+      continue; // both sides rejected
+    } else if (b.resolution == 'theirs') {
+      out.addAll(b.theirs);
+    } else if (b.resolution == 'both') {
+      out.addAll(b.ours);
+      out.addAll(b.theirs);
+    } else {
+      out.addAll(b.ours); // default / "ours"
+    }
+  }
+  return out.join('\n');
+}
+
+/* ---------- change navigation ---------- */
+
+enum ChangeTargetKind { block, file, none }
+
+class ChangeTarget {
+  const ChangeTarget(this.kind, [this.index = -1]);
+  final ChangeTargetKind kind;
+  final int index;
+}
+
+/// Decide the first step of a prev/next-change move. Split out from the widget
+/// tree so the index arithmetic — the part that is all off-by-one risk — is
+/// testable.
+///
+/// Returns a `block` target to move within the current file, `file` to open an
+/// adjacent one, or `none` when there is nowhere left to go. The caller keeps
+/// walking files on a `file` result until one actually renders a block.
+ChangeTarget nextChangeTarget({
+  required int blockIndex,
+  required int blockCount,
+  required int navIndex,
+  required int navCount,
+  required int dir,
+}) {
+  final far = dir > 0 ? 0 : blockCount - 1;
+  // Nothing focused yet: enter the current file from the end we came from.
+  if (blockIndex == -1 && blockCount > 0) {
+    return ChangeTarget(ChangeTargetKind.block, far);
+  }
+  final next = blockIndex + dir;
+  if (next >= 0 && next < blockCount) {
+    return ChangeTarget(ChangeTargetKind.block, next);
+  }
+  final file = navIndex + dir;
+  if (file >= 0 && file < navCount) {
+    return ChangeTarget(ChangeTargetKind.file, file);
+  }
+  return const ChangeTarget(ChangeTargetKind.none);
+}
+
+/* ---------- AI endpoint ---------- */
+
+/// Normalize the AI 请求地址 preference into a /chat/completions endpoint.
+String aiEndpoint(String baseUrl) {
+  final url = baseUrl.trim().replaceFirst(RegExp(r'/+$'), '');
+  return url.endsWith('/chat/completions') ? url : '$url/chat/completions';
+}
+
+/* ---------- push rejection ---------- */
+
+/// Whether a `git push` failure is "the remote moved ahead" — i.e. updating the
+/// local branch and pushing again can resolve it. Everything else (auth, a
+/// refusing hook, a protected branch) is a real failure.
+bool isPushRejected(String stderr) =>
+    stderr.contains('[rejected]') ||
+    stderr.contains('fetch first') ||
+    stderr.contains('non-fast-forward');
+
+class AuthFailure {
+  const AuthFailure(this.kind, this.username);
+  final String kind;
+  final String? username;
+}
+
+/// Classify credential failures and retain the authenticated GitHub account
+/// when the remote names it. An HTTP 403 alone is not enough: repositories and
+/// proxies use it for failures unrelated to credentials.
+AuthFailure? authFailureInfo(String stderr) {
+  final denied = RegExp(
+          r'^remote: Permission to .+ denied to ([A-Za-z0-9-]+)\.\s*$',
+          multiLine: true)
+      .firstMatch(stderr);
+  if (denied != null &&
+      stderr.contains('The requested URL returned error: 403')) {
+    return AuthFailure('github-403', denied[1]);
+  }
+  if (stderr.contains('could not read Username') ||
+      stderr.contains('could not read Password')) {
+    return const AuthFailure('https-prompt', null);
+  }
+  if (stderr.contains('Authentication failed')) {
+    return const AuthFailure('https-auth', null);
+  }
+  if (stderr.contains('Permission denied (publickey)')) {
+    return const AuthFailure('ssh-publickey', null);
+  }
+  return null;
+}
+
+bool isAuthFailure(String stderr) => authFailureInfo(stderr) != null;
+
+/// Decide whether the combined credential button can reuse the current helper
+/// entry or needs a new token. The token itself never leaves the input field.
+String credentialAction({
+  required bool hasCredential,
+  required String? infoUsername,
+  required String username,
+  required String token,
+}) {
+  final u = username.trim();
+  final t = token.trim();
+  if (u.isEmpty) return 'missing-username';
+  if (t.isNotEmpty) return 'save-and-test';
+  if (hasCredential && u == infoUsername) return 'test';
+  return 'missing-token';
+}
+
+/* ---------- folder tree (push dialog) ---------- */
+
+class TreeFile {
+  const TreeFile(this.path, this.status);
+  final String path;
+  final String status;
+}
+
+class TreeNode {
+  const TreeNode(this.name, this.dirs, this.files, this.count);
+  final String name;
+  final List<TreeNode> dirs;
+  final List<TreeFile> files;
+  final int count;
+}
+
+class _MutableNode {
+  _MutableNode(this.name);
+  String name;
+  final dirs = <String, _MutableNode>{};
+  final files = <TreeFile>[];
+}
+
+/// Groups files into a folder tree. Folders sort before files and carry the
+/// number of files below them. Single-child folder chains collapse by default;
+/// interactive callers can keep every level visible. The root keeps an empty
+/// name — the caller labels it with the repo name.
+TreeNode pathTree(List<TreeFile> files, {bool collapseSingleChild = true}) {
+  final root = _MutableNode('');
+  for (final f in files) {
+    final parts = f.path.split('/');
+    var node = root;
+    for (final dir in parts.sublist(0, parts.length - 1)) {
+      node = node.dirs.putIfAbsent(dir, () => _MutableNode(dir));
+    }
+    node.files.add(f);
+  }
+  return _closeTree(root, collapseSingleChild);
+}
+
+TreeNode _closeTree(_MutableNode node, bool collapseSingleChild) {
+  // Collapse a chain of single-child folders into one row. The root is exempt:
+  // it is the repo, and swallowing "app" into it would hide a real folder.
+  var cur = node;
+  while (collapseSingleChild &&
+      cur.name.isNotEmpty &&
+      cur.files.isEmpty &&
+      cur.dirs.length == 1) {
+    final only = cur.dirs.values.first;
+    final merged = _MutableNode('${cur.name}/${only.name}');
+    merged.dirs.addAll(only.dirs);
+    merged.files.addAll(only.files);
+    cur = merged;
+  }
+
+  final dirs = cur.dirs.values
+      .map((d) => _closeTree(d, collapseSingleChild))
+      .toList()
+    ..sort((a, b) => a.name.compareTo(b.name));
+  final own = cur.files.toList()..sort((a, b) => a.path.compareTo(b.path));
+
+  var count = own.length;
+  for (final d in dirs) {
+    count += d.count;
+  }
+  return TreeNode(cur.name, dirs, own, count);
 }

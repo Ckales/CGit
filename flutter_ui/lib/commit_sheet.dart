@@ -30,7 +30,12 @@ class CommitSheet extends StatefulWidget {
     this.menuFor,
     this.onDiscard,
     this.ai,
+    this.docked = false,
   });
+
+  /// Inline under the history, scoped to the repo picked in the sidebar — the
+  /// Tauri docked commit panel — instead of a dialog over the window.
+  final bool docked;
 
   final List<FileStatus> changes;
   final Git git;
@@ -205,6 +210,55 @@ class _CommitSheetState extends State<CommitSheet> {
   Widget build(BuildContext context) {
     final p = Theming.of(context);
 
+    final panel = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Text(widget.docked ? '提交 · ${widget.repoName}' : '提交',
+                style:
+                    ui.copyWith(color: p.text, fontWeight: FontWeight.w600)),
+            const Spacer(),
+            _Btn(
+              tooltip: widget.docked ? '收起' : '关闭 (Esc)',
+              icon: true,
+              onTap: widget.onClose,
+              child: _label(p, '✕', size: 13),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Expanded(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              SizedBox(width: 360, child: _changesColumn(p)),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: p.bg,
+                    border: Border.all(color: p.border),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  clipBehavior: Clip.antiAlias,
+                  child: widget.diffPane,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+
+    if (widget.docked) {
+      return Container(
+        color: p.bgAlt,
+        padding: const EdgeInsets.all(12),
+        child: panel,
+      );
+    }
+
     return Positioned.fill(
       child: ColoredBox(
         color: const Color(0x80000000),
@@ -226,46 +280,7 @@ class _CommitSheetState extends State<CommitSheet> {
                       offset: Offset(0, 8)),
                 ],
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Row(
-                    children: [
-                      Text('提交',
-                          style: ui.copyWith(
-                              color: p.text, fontWeight: FontWeight.w600)),
-                      const Spacer(),
-                      _Btn(
-                        tooltip: '关闭 (Esc)',
-                        icon: true,
-                        onTap: widget.onClose,
-                        child: _label(p, '✕', size: 13),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Expanded(
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        SizedBox(width: 360, child: _changesColumn(p)),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Container(
-                            decoration: BoxDecoration(
-                              color: p.bg,
-                              border: Border.all(color: p.border),
-                              borderRadius: BorderRadius.circular(6),
-                            ),
-                            clipBehavior: Clip.antiAlias,
-                            child: widget.diffPane,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
+              child: panel,
             ),
           ),
         ),

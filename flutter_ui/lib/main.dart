@@ -192,6 +192,10 @@ class _RepoScreenState extends State<RepoScreen> {
   late DiffMode _mode =
       widget.prefs.isSplitDiff ? DiffMode.split : DiffMode.unified;
   bool _commitOpen = false;
+
+  /// The commit panel docked under the history for the active repo — only
+  /// ever for one with changes; a clean repo gets no empty box.
+  bool _commitDocked = false;
   bool _settingsOpen = false;
   bool _cloneOpen = false;
 
@@ -328,15 +332,47 @@ class _RepoScreenState extends State<RepoScreen> {
       orElse: () => workspace.repos.first,
     );
     setState(() {
-      _git = Git(repo.path);
-      _repoName = repo.name;
-      _repoPath = repo.path;
       _workspaceRoot = workspace.root;
       _workspaceRepos = workspace.repos;
     });
-    await widget.prefs.rememberRepo(repo.path);
+    // The root, like the Tauri addRecent: a member path reopens as a lone repo.
+    await widget.prefs.rememberRepo(workspace.root);
+    await _setActiveRepo(repo);
+  }
+
+  /// Point the panels at one repo of the open workspace. The sidebar's 仓库
+  /// list comes here, not to [_openRepo]: rediscovering from a member's path
+  /// finds only that member, and the rest of the list would disappear.
+  Future<void> _setActiveRepo(RepoRef repo) async {
+    setState(() {
+      _git = Git(repo.path);
+      _repoName = repo.name;
+      _repoPath = repo.path;
+      _commitDocked = false;
+      // Selection, open diff and search all name the previous repo's objects.
+      _selectedCommit = null;
+      _commitFiles = const [];
+      _searchResults = null;
+      _target = const NoDiff();
+      _paneBack = null;
+    });
     _startWatching(repo.path);
     await _refresh();
+  }
+
+  /// A click in the sidebar's 仓库 list, as the Tauri openRepoCommit: switch to
+  /// the repo, and dock its commit panel only when it has something to commit.
+  Future<void> _openRepoCommit(RepoRef repo) async {
+    await _setActiveRepo(repo);
+    if (!mounted) return;
+    if (_changes.isEmpty) {
+      setState(() => _status = '${repo.name} 没有可提交内容');
+      return;
+    }
+    setState(() {
+      _commitDocked = true;
+      _commitOpen = false;
+    });
   }
 
   /// Watch the open repo so changes made outside this app — a commit from the
@@ -813,8 +849,14 @@ class _RepoScreenState extends State<RepoScreen> {
 
   /// The diff shown belonged to the dialog; left open it would drop into the
   /// main window on its own — the Tauri closeCommitDialog rule.
+  void _openCommitDialog() => setState(() {
+        _commitDocked = false;
+        _commitOpen = true;
+      });
+
   void _closeCommit() => setState(() {
         _commitOpen = false;
+        _commitDocked = false;
         _target = const NoDiff();
         _paneBack = null;
       });
@@ -985,8 +1027,8 @@ class _RepoScreenState extends State<RepoScreen> {
       // follow the list as the user sees it, not git's flat path order.
       final byPath = {for (final f in raw) f.path: f};
       final files = [
-        for (final leaf in treeOrder(pathTree(
-            [for (final f in raw) TreeFile(f.path, f.status)])))
+        for (final leaf in treeOrder(
+            pathTree([for (final f in raw) TreeFile(f.path, f.status)])))
           byPath[leaf.path]!,
       ];
       setState(() {
@@ -1284,7 +1326,7 @@ class _RepoScreenState extends State<RepoScreen> {
           setState(() => _settingsOpen = true);
         },
         const SingleActivator(LogicalKeyboardKey.enter, meta: true): () {
-          if (_git != null) setState(() => _commitOpen = true);
+          if (_git != null) _openCommitDialog();
         },
         const SingleActivator(LogicalKeyboardKey.keyR, meta: true): () {
           if (_git != null) _refresh();
@@ -1394,29 +1436,7 @@ class _RepoScreenState extends State<RepoScreen> {
                     onResolveSide: _resolveSide,
                     onToggleBase: _toggleBase,
                   ),
-                if (_commitOpen)
-                  CommitSheet(
-                    changes: _changes,
-                    git: _git!,
-                    repoName: _repoName,
-                    branch: _branch,
-                    diffPane: _diffPane(p),
-                    selected: switch (_target) {
-                      WorkingFileDiff(:final path, :final staged) => (
-                          path: path,
-                          staged: staged
-                        ),
-                      _ => null,
-                    },
-                    menuFor: _fileMenu,
-                    onDiscard: _discardFile,
-                    onClose: _closeCommit,
-                    onChanged: _refresh,
-                    onPickFile: _showFile,
-                    onCommitAndPush: _push,
-                    onCreatePatch: _createWorkingPatch,
-                    ai: _ai,
-                  ),
+                if (_commitOpen) _commitSheet(p),
               ],
             ),
           ),
@@ -1470,7 +1490,7 @@ class _RepoScreenState extends State<RepoScreen> {
                     label: '提交',
                     enabled: _git != null,
                     tooltip: '提交 (⌘↵)',
-                    onTap: () => setState(() => _commitOpen = true)),
+                    onTap: _openCommitDialog),
                 // Disabled while any network action runs: they all move the same refs,
                 // and a fetch racing a push fails in ways that are nobody's fault.
                 _ToolButton(
@@ -1633,7 +1653,7 @@ class _RepoScreenState extends State<RepoScreen> {
                 palette: p,
                 bold: r.path == _repoPath,
                 tooltip: r.path,
-                onTap: () => _openRepo(r.path),
+                onTap: () => _openRepoCommit(r),
               ),
           ],
           _SectionHead(
@@ -1770,46 +1790,79 @@ class _RepoScreenState extends State<RepoScreen> {
     );
   }
 
+  Widget _commitSheet(Palette p, {bool docked = false}) => CommitSheet(
+        changes: _changes,
+        git: _git!,
+        repoName: _repoName,
+        branch: _branch,
+        diffPane: _diffPane(p),
+        selected: switch (_target) {
+          WorkingFileDiff(:final path, :final staged) => (
+              path: path,
+              staged: staged
+            ),
+          _ => null,
+        },
+        menuFor: _fileMenu,
+        onDiscard: _discardFile,
+        onClose: _closeCommit,
+        onChanged: _refresh,
+        onPickFile: _showFile,
+        onCommitAndPush: _push,
+        onCreatePatch: _createWorkingPatch,
+        ai: _ai,
+        docked: docked,
+      );
+
   Widget _mainRight(Palette p) {
+    // The Tauri data-diff-open rule: nothing selected means no lower half at
+    // all, and the history takes the window. The dialog, when open, holds the
+    // diff pane, so the main window has nothing to show below either.
+    final docked = _commitDocked && !_commitOpen;
+    final lowerOpen = docked ||
+        (!_commitOpen && (_target is! NoDiff || _selectedCommit != null));
+    final history = Column(
+      children: [
+        _historyHead(p),
+        Expanded(
+          child: _searchResults != null
+              ? _searchList(p)
+              : HistoryView(
+                  layout: _graph,
+                  selected: _selectedCommit?.id,
+                  onSelect: _selectCommit,
+                  controller: _historyScroll,
+                  menuFor: _commitMenu,
+                ),
+        ),
+      ],
+    );
     return Column(
       children: [
-        SizedBox(
-          height: _historyHeight,
-          child: Column(
-            children: [
-              _historyHead(p),
-              Expanded(
-                child: _searchResults != null
-                    ? _searchList(p)
-                    : HistoryView(
-                        layout: _graph,
-                        selected: _selectedCommit?.id,
-                        onSelect: _selectCommit,
-                        controller: _historyScroll,
-                        menuFor: _commitMenu,
-                      ),
-              ),
-            ],
-          ),
-        ),
+        if (lowerOpen)
+          SizedBox(height: _historyHeight, child: history)
+        else
+          Expanded(child: history),
         // Between history and diff, where the Tauri version puts it: the user
         // sees it right after the operation that stopped.
         if (_conflicts.isNotEmpty || _op != 'none') _conflictBanner(p),
-        _Splitter(
-          axis: Axis.vertical,
-          palette: p,
-          onDrag: (d) => setState(
-              () => _historyHeight = (_historyHeight + d).clamp(80.0, 700.0)),
-          onDragEnd: () => widget.prefs.setHistoryHeight(_historyHeight),
-          onReset: () {
-            setState(() => _historyHeight = 260);
-            widget.prefs.setHistoryHeight(260);
-          },
-        ),
-        // While the commit dialog is open it has the diff pane — one pane, one
-        // place, as the Tauri app moves the element. Building it here too would
-        // also mount its block GlobalKeys twice.
-        Expanded(child: _commitOpen ? const SizedBox() : _diffPane(p)),
+        if (lowerOpen) ...[
+          _Splitter(
+            axis: Axis.vertical,
+            palette: p,
+            onDrag: (d) => setState(
+                () => _historyHeight = (_historyHeight + d).clamp(80.0, 700.0)),
+            onDragEnd: () => widget.prefs.setHistoryHeight(_historyHeight),
+            onReset: () {
+              setState(() => _historyHeight = 260);
+              widget.prefs.setHistoryHeight(260);
+            },
+          ),
+          // One diff pane, one place, as the Tauri app moves the element:
+          // building it twice would mount its block GlobalKeys twice.
+          Expanded(
+              child: docked ? _commitSheet(p, docked: true) : _diffPane(p)),
+        ],
       ],
     );
   }
@@ -1861,8 +1914,8 @@ class _RepoScreenState extends State<RepoScreen> {
               _ => false,
             },
             onTap: () async {
-              setState(() =>
-                  _target = CommitFileDiff(_selectedCommit!.id, f.path));
+              setState(
+                  () => _target = CommitFileDiff(_selectedCommit!.id, f.path));
               await _reloadDiff();
             },
           ),
@@ -1933,6 +1986,8 @@ class _RepoScreenState extends State<RepoScreen> {
                     onTap: () => setState(() {
                           _target = const NoDiff();
                           _paneBack = null;
+                          _selectedCommit = null;
+                          _commitFiles = const [];
                         }),
                   ),
                 ],

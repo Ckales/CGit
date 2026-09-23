@@ -849,10 +849,27 @@ class _RepoScreenState extends State<RepoScreen> {
 
   /// The diff shown belonged to the dialog; left open it would drop into the
   /// main window on its own — the Tauri closeCommitDialog rule.
-  void _openCommitDialog() => setState(() {
-        _commitDocked = false;
-        _commitOpen = true;
-      });
+  /// Asked live rather than read off [_changes], which is only as fresh as the
+  /// last refresh — the Tauri openCommitDialog rule. A clean repo would open a
+  /// dialog with an empty list and a dead 提交 button.
+  Future<void> _openCommitDialog() async {
+    final git = _git;
+    if (git == null) return;
+    try {
+      if ((await git.status()).isEmpty) {
+        await _notify('当前没有可提交内容');
+        return;
+      }
+    } on GitError catch (e) {
+      if (mounted) setState(() => _status = e.message);
+      return;
+    }
+    if (!mounted) return;
+    setState(() {
+      _commitDocked = false;
+      _commitOpen = true;
+    });
+  }
 
   void _closeCommit() => setState(() {
         _commitOpen = false;
@@ -1270,6 +1287,26 @@ class _RepoScreenState extends State<RepoScreen> {
       await _refresh();
       if (mounted) setState(() => _status = e.message);
     }
+  }
+
+  /// A request that did not happen: status bar plus a box that stays until
+  /// dismissed, as the Tauri notify.
+  Future<void> _notify(String message) async {
+    setState(() => _status = message);
+    final p = Theming.of(context);
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: p.bgElev,
+        content: Text(message, style: ui.copyWith(color: p.text)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: Text('确定', style: ui.copyWith(color: p.accent)),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<bool> _confirm({required String title, required String body}) async {

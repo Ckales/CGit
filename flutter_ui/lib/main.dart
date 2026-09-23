@@ -19,6 +19,7 @@ import 'history_view.dart';
 import 'merge_view.dart';
 import 'network_ops.dart';
 import 'prefs.dart';
+import 'dialogs.dart';
 import 'prompt.dart';
 import 'rebase_plan.dart';
 import 'rebase_sheet.dart';
@@ -375,6 +376,80 @@ class _RepoScreenState extends State<RepoScreen> {
     });
   }
 
+  /// [_workspaceRepos] with one repo's branch badge replaced.
+  List<RepoRef> _withRepoBranch(String path, String branch) => [
+        for (final r in _workspaceRepos)
+          r.path == path
+              ? RepoRef(path: r.path, name: r.name, branch: branch)
+              : r,
+      ];
+
+  /// Right-click on a 仓库 row, as the Tauri showRepoBranchMenu: that repo's
+  /// local and remote branches, a click checks one out there. The selected
+  /// repo stays as it is.
+  Future<void> _showRepoBranchMenu(RepoRef repo, Offset position) async {
+    final git = Git(repo.path);
+    final List<BranchInfo> locals;
+    final List<String> remotes;
+    try {
+      locals = await git.branches();
+      remotes = await git.remoteBranches();
+    } on GitError catch (e) {
+      if (mounted) setState(() => _status = e.message);
+      return;
+    }
+    if (!mounted) return;
+    await showRepoMenu(
+      context: context,
+      position: position,
+      items: [
+        MenuAction.header('${repo.name} · 本地分支'),
+        for (final b in locals)
+          MenuAction(
+            b.name,
+            b.isCurrent
+                ? () {}
+                : () =>
+                    _checkoutInRepo(repo, b.name, () => git.checkout(b.name)),
+            current: b.isCurrent,
+          ),
+        // Every remote branch as git lists it, matching the 远端分支 panel.
+        if (remotes.isNotEmpty) ...[
+          const MenuAction.header('远端分支'),
+          for (final full in remotes)
+            MenuAction(
+              full,
+              () => _checkoutInRepo(repo, full, () => git.checkoutRef(full)),
+            ),
+        ],
+      ],
+    );
+  }
+
+  Future<void> _checkoutInRepo(
+    RepoRef repo,
+    String label,
+    Future<void> Function() action,
+  ) async {
+    final active = repo.path == _repoPath;
+    try {
+      await action();
+      if (active) {
+        await _refresh();
+      } else {
+        final branch = await Git(repo.path).currentBranch();
+        if (!mounted) return;
+        setState(() => _workspaceRepos = _withRepoBranch(repo.path, branch));
+      }
+    } on GitError catch (e) {
+      if (mounted) setState(() => _status = e.message);
+      return;
+    }
+    if (!mounted) return;
+    setState(
+        () => _status = active ? '已切换到 $label' : '${repo.name} 已切换到 $label');
+  }
+
   /// Watch the open repo so changes made outside this app — a commit from the
   /// terminal, a checkout in an IDE — show up without pressing 刷新.
   void _startWatching(String path) {
@@ -456,6 +531,9 @@ class _RepoScreenState extends State<RepoScreen> {
         _tracking = results[8] as Tracking;
         _stashes = results[9] as List<StashEntry>;
         _remoteBranches = results[10] as List<String>;
+        // The 仓库 badges were read once at discover; keep the open one in step
+        // with checkouts made here or elsewhere.
+        _workspaceRepos = _withRepoBranch(_repoPath, _branch);
         _status = '就绪';
       });
       await _reloadDiff();
@@ -1150,32 +1228,27 @@ class _RepoScreenState extends State<RepoScreen> {
   /// aborts the push retry rather than picking a default — rebasing someone's
   /// commits because they dismissed a dialog is not a recoverable mistake.
   Future<UpdateStrategy?> _askUpdateStrategy() async {
-    final p = Theming.of(context);
-    return showDialog<UpdateStrategy>(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: p.bgElev,
-        title: Text('远端有新提交', style: ui.copyWith(color: p.text, fontSize: 15)),
-        content: Text(
-          '推送被拒绝：远端已经领先。要先用哪种方式更新本地分支？\n\n'
-          'git 配置里没有 pull.rebase，所以这次由你决定。',
-          style: ui.copyWith(color: p.text),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: Text('取消推送', style: ui.copyWith(color: p.textDim)),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(UpdateStrategy.merge),
-            child: Text('合并', style: ui.copyWith(color: p.accent)),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(UpdateStrategy.rebase),
-            child: Text('变基', style: ui.copyWith(color: p.accent)),
-          ),
-        ],
+    return showAppDialog<UpdateStrategy>(
+      context,
+      title: '远端有新提交',
+      badge: DialogBadge.info,
+      maxWidth: 460,
+      body: const DialogText(
+        '推送被拒绝：远端已经领先。要先用哪种方式更新本地分支？\n'
+        'git 配置里没有 pull.rebase，所以这次由你决定。',
       ),
+      actions: [
+        DialogButton('取消推送', onTap: () => Navigator.of(context).pop()),
+        DialogButton(
+          '合并',
+          onTap: () => Navigator.of(context).pop(UpdateStrategy.merge),
+        ),
+        DialogButton(
+          '变基',
+          kind: DialogButtonKind.primary,
+          onTap: () => Navigator.of(context).pop(UpdateStrategy.rebase),
+        ),
+      ],
     );
   }
 
@@ -1291,43 +1364,27 @@ class _RepoScreenState extends State<RepoScreen> {
 
   /// A request that did not happen: status bar plus a box that stays until
   /// dismissed, as the Tauri notify.
-  Future<void> _notify(String message) async {
+  Future<void> _notify(String message) {
     setState(() => _status = message);
-    final p = Theming.of(context);
-    await showDialog<void>(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: p.bgElev,
-        content: Text(message, style: ui.copyWith(color: p.text)),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: Text('确定', style: ui.copyWith(color: p.accent)),
-          ),
-        ],
-      ),
-    );
+    return showNotice(context, message);
   }
 
+  /// Every caller is about to throw something away, hence the red badge and
+  /// button; Enter does not press it.
   Future<bool> _confirm({required String title, required String body}) async {
-    final p = Theming.of(context);
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: p.bgElev,
-        title: Text(title, style: ui.copyWith(color: p.text, fontSize: 15)),
-        content: Text(body, style: ui.copyWith(color: p.text)),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: Text('取消', style: ui.copyWith(color: p.textDim)),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: Text('继续', style: ui.copyWith(color: p.red)),
-          ),
-        ],
-      ),
+    final ok = await showAppDialog<bool>(
+      context,
+      title: title,
+      badge: DialogBadge.danger,
+      body: DialogText(body),
+      actions: [
+        DialogButton('取消', onTap: () => Navigator.of(context).pop(false)),
+        DialogButton(
+          '继续',
+          kind: DialogButtonKind.danger,
+          onTap: () => Navigator.of(context).pop(true),
+        ),
+      ],
     );
     return ok ?? false;
   }
@@ -1684,13 +1741,20 @@ class _RepoScreenState extends State<RepoScreen> {
           if (_workspaceRepos.length > 1) ...[
             _SectionHead(label: '仓库', palette: p),
             for (final r in _workspaceRepos)
-              _SidebarRow(
-                label: r.name,
-                badge: r.branch.isEmpty ? null : r.branch,
-                palette: p,
-                bold: r.path == _repoPath,
-                tooltip: r.path,
-                onTap: () => _openRepoCommit(r),
+              // Not a ContextMenuRegion: the menu lists the repo's branches,
+              // which have to be read before it can open.
+              GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onSecondaryTapUp: (d) =>
+                    _showRepoBranchMenu(r, d.globalPosition),
+                child: _SidebarRow(
+                  label: r.name,
+                  badge: r.branch.isEmpty ? null : r.branch,
+                  palette: p,
+                  bold: r.path == _repoPath,
+                  tooltip: '${r.path}\n右键切换分支',
+                  onTap: () => _openRepoCommit(r),
+                ),
               ),
           ],
           _SectionHead(

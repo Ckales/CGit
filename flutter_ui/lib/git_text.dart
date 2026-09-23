@@ -730,6 +730,13 @@ TreeNode _closeTree(_MutableNode node, bool collapseSingleChild) {
   return TreeNode(cur.name, dirs, own, count);
 }
 
+/// The files under [node] in the order the tree shows them — each folder's
+/// subfolders first, then its own files — so ↑/↓ walks the list as drawn.
+List<TreeFile> treeOrder(TreeNode node) => [
+      for (final d in node.dirs) ...treeOrder(d),
+      ...node.files,
+    ];
+
 /* ---------- patch file names ---------- */
 
 /// The filename `git format-patch` would give a commit: a numbered prefix, the

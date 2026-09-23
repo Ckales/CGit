@@ -4,7 +4,6 @@ import 'package:cgit_flutter/prefs.dart';
 import 'package:cgit_flutter/settings_sheet.dart';
 import 'package:cgit_flutter/theme.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -118,66 +117,24 @@ Future<void> _openPane(WidgetTester tester, String name) async {
 Finder _rowOf(String label) =>
     find.ancestor(of: find.text(label), matching: find.byType(Row)).first;
 
-const _keychain = MethodChannel('plugins.it_nomads.com/flutter_secure_storage');
-
 void main() {
   setUp(() async {
     SharedPreferences.setMockInitialValues({});
     prefs = await Prefs.load();
   });
 
-  /// The ad-hoc signed build has no keychain-access-groups entitlement, so the
-  /// data-protection keychain answers every write with -34018. Saving with a
-  /// token typed used to die on that unhandled, leaving 保存 doing nothing.
-  group('ai token', () {
-    final writes = <Map>[];
+  testWidgets('a typed ai token is saved with 保存', (tester) async {
+    final ai = await AiSettings.load();
+    await _pump(tester, ai: ai);
+    await _openPane(tester, 'AI');
+    await tester.enterText(
+        find.descendant(of: _rowOf('令牌'), matching: find.byType(TextField)),
+        'sk-test');
+    await tester.tap(find.text('保存'));
+    await tester.pumpAndSettle();
 
-    setUp(() => writes.clear());
-    tearDown(() => TestDefaultBinaryMessengerBinding
-        .instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(_keychain, null));
-
-    void mockKeychain({required bool fail}) =>
-        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-            .setMockMethodCallHandler(_keychain, (call) async {
-          if (call.method == 'read') return null;
-          if (call.method == 'write') {
-            writes.add(call.arguments['options'] as Map);
-            if (fail) {
-              throw PlatformException(
-                  code: '-34018',
-                  message: "A required entitlement isn't present.");
-            }
-          }
-          return null;
-        });
-
-    Future<void> typeTokenAndSave(WidgetTester tester) async {
-      await _pump(tester, ai: await AiSettings.load());
-      await _openPane(tester, 'AI');
-      await tester.enterText(
-          find.descendant(
-              of: _rowOf('令牌'), matching: find.byType(TextField)),
-          'sk-test');
-      await tester.tap(find.text('保存'));
-      await tester.pumpAndSettle();
-    }
-
-    testWidgets('writes to the login keychain, which needs no entitlement',
-        (tester) async {
-      mockKeychain(fail: false);
-      await typeTokenAndSave(tester);
-      expect(writes, hasLength(1));
-      expect(writes.single['usesDataProtectionKeychain'], 'false');
-      expect(savedCount, 1);
-    }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
-
-    testWidgets('a failed write is reported, not swallowed', (tester) async {
-      mockKeychain(fail: true);
-      await typeTokenAndSave(tester);
-      expect(savedCount, 0);
-      expect(find.textContaining('令牌写入钥匙串失败'), findsOneWidget);
-    }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
+    expect(await ai.readToken(), 'sk-test');
+    expect(savedCount, 1);
   });
 
   group('panes', () {

@@ -1,6 +1,6 @@
 # CGit Flutter 界面
 
-CGit 的 Flutter 桌面界面，与 Tauri 版共用 `crates/cgit-core` 中的 Git 核心逻辑。
+CGit 的 Flutter 桌面界面，Git 核心逻辑位于 `crates/cgit-core`。
 
 ## 环境要求
 

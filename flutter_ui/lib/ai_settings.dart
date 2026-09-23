@@ -1,8 +1,4 @@
-import 'package:flutter/services.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-
-import 'git_frb.dart';
 
 /// The default system prompt, verbatim from the Tauri app so both frontends
 /// produce the same kind of message from the same diff.
@@ -13,37 +9,24 @@ const defaultAiPrompt = '''你是一个 Git 提交说明生成器。根据用户
 3. 只描述改动本身，不要解释 diff 语法，不要输出代码块标记。
 4. 直接输出提交说明正文，不要任何前缀或额外说明。''';
 
-/// AI settings, with the token held apart from the rest.
+/// AI settings, all in shared_preferences — the token included, matching the
+/// Tauri app's localStorage boundary (AGENTS.md).
 ///
-/// The Tauri app keeps all of these in WebKit localStorage, including the
-/// token — a plain-text file inside the app container. Here the endpoint, model
-/// and prompt go to shared_preferences (they are configuration) and the token
-/// goes to the Keychain (it is a credential). That is a deliberate improvement
-/// over the port source, not an accident of the platform: nothing about
-/// Flutter forced it, and AGENTS.md's rule is that credentials stay out of
-/// preferences.
+/// The token used to live in the login Keychain. This app is ad-hoc signed, so
+/// every rebuild changes its signature and "始终允许" stops matching: macOS asked
+/// for the login password again after each restart.
 class AiSettings {
-  AiSettings._(this._store, this._secure);
+  AiSettings._(this._store);
 
   static const _keyBaseUrl = 'cgit.ai.baseUrl';
   static const _keyModel = 'cgit.ai.model';
   static const _keyPrompt = 'cgit.ai.prompt';
+  static const _keyToken = 'cgit.ai.token';
 
-  /// The Keychain item. Not a preference key — it never touches the plist.
-  static const _secureToken = 'cgit.ai.token';
-
-  static Future<AiSettings> load() async => AiSettings._(
-        await SharedPreferences.getInstance(),
-        // The login keychain, not the data-protection one: that one needs a
-        // keychain-access-groups entitlement and a Team ID, and this app is
-        // ad-hoc signed, so every write there failed with -34018.
-        const FlutterSecureStorage(
-          mOptions: MacOsOptions(usesDataProtectionKeychain: false),
-        ),
-      );
+  static Future<AiSettings> load() async =>
+      AiSettings._(await SharedPreferences.getInstance());
 
   final SharedPreferences _store;
-  final FlutterSecureStorage _secure;
 
   String get baseUrl => _store.getString(_keyBaseUrl) ?? '';
   Future<void> setBaseUrl(String v) => _store.setString(_keyBaseUrl, v.trim());
@@ -54,26 +37,18 @@ class AiSettings {
   String get prompt => _store.getString(_keyPrompt) ?? defaultAiPrompt;
   Future<void> setPrompt(String v) => _store.setString(_keyPrompt, v);
 
-  /// Null when nothing is stored. A failed read (a locked keychain, a denied
-  /// or cancelled password prompt) is a [GitError], not null: swallowing it
-  /// sent an empty Bearer token and surfaced as a misleading HTTP 401.
-  Future<String?> readToken() async {
-    try {
-      return await _secure.read(key: _secureToken);
-    } on PlatformException catch (e) {
-      throw GitError('读取钥匙串中的令牌失败：${e.message ?? e.code}');
-    }
-  }
+  /// Null when nothing is stored.
+  Future<String?> readToken() async => _store.getString(_keyToken);
 
-  /// Writing an empty string deletes the item rather than storing "", so
+  /// Writing an empty string deletes the key rather than storing "", so
   /// clearing the field really removes the credential.
   Future<void> writeToken(String token) async {
     final value = token.trim();
     if (value.isEmpty) {
-      await _secure.delete(key: _secureToken);
+      await _store.remove(_keyToken);
       return;
     }
-    await _secure.write(key: _secureToken, value: value);
+    await _store.setString(_keyToken, value);
   }
 
   /// Whether generation can even be attempted. Checked before the button is

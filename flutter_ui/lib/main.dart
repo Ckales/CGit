@@ -165,6 +165,10 @@ class _RepoScreenState extends State<RepoScreen> {
 
   GraphCommit? _selectedCommit;
   List<FileStatus> _commitFiles = const [];
+
+  /// Folded folders in the commit file tree, by path. Kept across commits: a
+  /// folder the user closed once is usually one they don't care about.
+  final _collapsedCommitDirs = <String>{};
   DiffTarget _target = const NoDiff();
 
   /// One entry per run of changed lines in the open diff, "hunkIndex:rowIndex",
@@ -806,6 +810,20 @@ class _RepoScreenState extends State<RepoScreen> {
         MenuAction('丢弃改动', () => _discardFile(f), danger: true),
       ];
 
+  /// A file in a past commit — the Tauri fileMenuItems without 丢弃改动, which
+  /// has nothing to discard there. Editor, history and blame all act on the
+  /// working-tree copy.
+  List<MenuAction> _commitFileMenu(String path) => [
+        MenuAction('在编辑器中打开', () => _openFile(path)),
+        MenuAction('复制文件路径', () async {
+          final full = '$_repoPath/$path';
+          await _git!.copyToClipboard(full);
+          if (mounted) setState(() => _status = '已复制 $full');
+        }),
+        MenuAction('文件历史', () => _showFileHistory(path)),
+        MenuAction('逐行归属 (blame)', () => _showBlame(path)),
+      ];
+
   /// The diff shown belonged to the dialog; left open it would drop into the
   /// main window on its own — the Tauri closeCommitDialog rule.
   void _closeCommit() => setState(() {
@@ -961,8 +979,16 @@ class _RepoScreenState extends State<RepoScreen> {
       _commitFiles = const [];
     });
     try {
-      final files = await git.commitFiles(commit.id);
+      final raw = await git.commitFiles(commit.id);
       if (!mounted) return;
+      // Stored in the tree's drawing order, so ↑/↓ and the first file opened
+      // follow the list as the user sees it, not git's flat path order.
+      final byPath = {for (final f in raw) f.path: f};
+      final files = [
+        for (final leaf in treeOrder(pathTree(
+            [for (final f in raw) TreeFile(f.path, f.status)])))
+          byPath[leaf.path]!,
+      ];
       setState(() {
         _commitFiles = files;
         _target = files.isEmpty
@@ -1747,23 +1773,6 @@ class _RepoScreenState extends State<RepoScreen> {
                 ),
               ),
             ),
-          _SectionHead(label: '改动', palette: p),
-          for (final f in _changes)
-            ContextMenuRegion(
-              items: () => _fileMenu(f),
-              child: _SidebarRow(
-                label: f.path,
-                palette: p,
-                leading: f.status,
-                leadingColor: f.staged ? p.green : p.yellow,
-                onTap: () => _showFile(f),
-                active: switch (_target) {
-                  WorkingFileDiff(:final path, :final staged) =>
-                    path == f.path && staged == f.staged,
-                  _ => false,
-                },
-              ),
-            ),
         ],
       ),
     );
@@ -1811,6 +1820,66 @@ class _RepoScreenState extends State<RepoScreen> {
         Expanded(child: _commitOpen ? const SizedBox() : _diffPane(p)),
       ],
     );
+  }
+
+  /// The commit's files as a folder tree. Read-only, so single-child folder
+  /// chains collapse into one row — the commit sheet keeps every level only
+  /// because each one carries a checkbox.
+  List<Widget> _commitFileRows(Palette p) {
+    final byPath = {for (final f in _commitFiles) f.path: f};
+    final root =
+        pathTree([for (final f in _commitFiles) TreeFile(f.path, f.status)]);
+    final rows = <Widget>[];
+    void addNode(TreeNode node, String parent, int depth) {
+      for (final dir in node.dirs) {
+        final path = parent.isEmpty ? dir.name : '$parent/${dir.name}';
+        final open = !_collapsedCommitDirs.contains(path);
+        rows.add(_SidebarRow(
+          label: dir.name,
+          palette: p,
+          indent: depth * 12,
+          icon: Row(mainAxisSize: MainAxisSize.min, children: [
+            Disclosure(open: open, color: p.textDim),
+            const SizedBox(width: 4),
+            FolderIcon(color: p.textDim),
+          ]),
+          tooltip: path,
+          onTap: () => setState(() {
+            if (!_collapsedCommitDirs.remove(path)) {
+              _collapsedCommitDirs.add(path);
+            }
+          }),
+        ));
+        if (open) addNode(dir, path, depth + 1);
+      }
+      for (final leaf in node.files) {
+        final f = byPath[leaf.path]!;
+        rows.add(ContextMenuRegion(
+          items: () => _commitFileMenu(f.path),
+          child: _SidebarRow(
+            label: f.path.split('/').last,
+            palette: p,
+            // Past the disclosure triangle's width, so a file lines up with
+            // its folder's name rather than with the folder's arrow.
+            indent: depth * 12 + (depth > 0 ? 12 : 0),
+            icon: StatusBadge(status: f.status),
+            tooltip: f.path,
+            active: switch (_target) {
+              CommitFileDiff(:final path) => path == f.path,
+              _ => false,
+            },
+            onTap: () async {
+              setState(() =>
+                  _target = CommitFileDiff(_selectedCommit!.id, f.path));
+              await _reloadDiff();
+            },
+          ),
+        ));
+      }
+    }
+
+    addNode(root, '', 0);
+    return rows;
   }
 
   Widget _diffPane(Palette p) {
@@ -1889,28 +1958,7 @@ class _RepoScreenState extends State<RepoScreen> {
                     decoration: BoxDecoration(
                       border: Border(right: BorderSide(color: p.border)),
                     ),
-                    child: ListView(
-                      children: [
-                        for (final f in _commitFiles)
-                          _SidebarRow(
-                            label: f.path,
-                            // Core reports each file's status in the commit,
-                            // so the list can say added / modified / deleted.
-                            leading: f.status,
-                            leadingColor: p.textDim,
-                            palette: p,
-                            active: switch (_target) {
-                              CommitFileDiff(:final path) => path == f.path,
-                              _ => false,
-                            },
-                            onTap: () async {
-                              setState(() => _target =
-                                  CommitFileDiff(_selectedCommit!.id, f.path));
-                              await _reloadDiff();
-                            },
-                          ),
-                      ],
-                    ),
+                    child: ListView(children: _commitFileRows(p)),
                   ),
                 ),
               Expanded(
@@ -2595,10 +2643,18 @@ class _SidebarRow extends StatefulWidget {
     this.onTap,
     this.onTapAt,
     this.tooltip,
+    this.indent = 0,
+    this.icon,
   });
 
   final String label;
   final Palette palette;
+
+  /// Extra left padding, for tree rows.
+  final double indent;
+
+  /// A drawn lead-in (status badge, folder) — [leading] is the text one.
+  final Widget? icon;
   final String? leading;
   final Color? leadingColor;
   final bool active;
@@ -2634,7 +2690,7 @@ class _SidebarRowState extends State<_SidebarRow> {
             : (_) => widget.onTapAt!(menuAnchorBelow(context)),
         child: Container(
           height: 22,
-          padding: const EdgeInsets.symmetric(horizontal: 10),
+          padding: EdgeInsets.only(left: 10 + widget.indent, right: 10),
           color: widget.active
               ? p.bgSel
               : _hover
@@ -2642,6 +2698,10 @@ class _SidebarRowState extends State<_SidebarRow> {
                   : null,
           child: Row(
             children: [
+              if (widget.icon != null) ...[
+                widget.icon!,
+                const SizedBox(width: 6),
+              ],
               if (widget.leading != null) ...[
                 SizedBox(
                   width: 14,

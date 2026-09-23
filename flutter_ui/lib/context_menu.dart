@@ -51,10 +51,12 @@ class MenuAction {
 
 /// Where a dropdown opens: under the left edge of the widget that owns
 /// [context], not wherever the pointer happened to land on it — a menu that
-/// shifts with the click point looks like it is chasing the mouse.
-Offset menuAnchorBelow(BuildContext context) {
+/// shifts with the click point looks like it is chasing the mouse. [right]
+/// anchors under the right edge instead, for [showRepoMenu]'s `alignRight`.
+Offset menuAnchorBelow(BuildContext context, {bool right = false}) {
   final box = context.findRenderObject() as RenderBox;
-  return box.localToGlobal(Offset(0, box.size.height + 4));
+  return box.localToGlobal(
+      Offset(right ? box.size.width : 0, box.size.height + 4));
 }
 
 /// Show a context menu at a global position.
@@ -72,6 +74,7 @@ Future<void> showRepoMenu({
   required BuildContext context,
   required Offset position,
   required List<MenuAction> items,
+  bool alignRight = false,
 }) async {
   final p = Theming.of(context);
   // Passed down by hand: the menu is a new route, and Theming isn't an
@@ -92,10 +95,16 @@ Future<void> showRepoMenu({
       side: BorderSide(color: p.border),
       borderRadius: BorderRadius.circular(6),
     ),
-    position: RelativeRect.fromRect(
-      Rect.fromLTWH(position.dx, position.dy, 0, 0),
-      Offset.zero & overlay.size,
-    ),
+    // alignRight: left > right makes showMenu grow leftwards with its right
+    // edge on position.dx — the split button's chevron, whose menu belongs
+    // under the button, not hanging off past it.
+    position: alignRight
+        ? RelativeRect.fromLTRB(overlay.size.width, position.dy,
+            overlay.size.width - position.dx, overlay.size.height - position.dy)
+        : RelativeRect.fromRect(
+            Rect.fromLTWH(position.dx, position.dy, 0, 0),
+            Offset.zero & overlay.size,
+          ),
     items: [
       for (var i = 0; i < items.length; i++)
         items[i].header

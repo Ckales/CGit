@@ -310,6 +310,17 @@ void main() {
       expect(app.dirs.map((d) => d.name), ['api', 'core', 'services', 'utils']);
       expect(app.dirs.first.dirs.map((d) => d.name), ['v1']);
     });
+
+    test('treeOrder lists files as drawn: folders first, then own files', () {
+      final root = pathTree([
+        const TreeFile('README.md', 'modified'),
+        const TreeFile('b/z.dart', 'new'),
+        const TreeFile('a/y.dart', 'new'),
+        const TreeFile('a/sub/x.dart', 'new'),
+      ]);
+      expect(treeOrder(root).map((f) => f.path),
+          ['a/sub/x.dart', 'a/y.dart', 'b/z.dart', 'README.md']);
+    });
   });
 }
 

@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE.md)
 [![Platform: macOS](https://img.shields.io/badge/platform-macOS-lightgrey.svg)](#系统要求)
 
-CGit 是一款面向 macOS 的 Git 图形客户端，交互参考 JetBrains IDE 内置的 Git 工具，但以独立、轻量的桌面应用形式提供。Git 核心逻辑由 Rust 实现（`crates/cgit-core`），上层提供两套界面：基于 Tauri 的 HTML/CSS/JavaScript 界面，以及 Flutter 桌面界面。
+CGit 是一款面向 macOS 的 Git 图形客户端，交互参考 JetBrains IDE 内置的 Git 工具，但以独立、轻量的桌面应用形式提供。界面使用 Flutter 构建，Git 核心逻辑由 Rust 实现，两者通过 flutter_rust_bridge 连接。
 
 > 当前为早期版本，仅支持 macOS，暂未提供签名和公证的官方安装包。
 
@@ -53,9 +53,10 @@ CGit 是一款面向 macOS 的 Git 图形客户端，交互参考 JetBrains IDE 
 
 - macOS
 - [Git](https://git-scm.com/) 命令行工具
-- [Node.js](https://nodejs.org/) 20.19 或更高版本（Tauri 版）
+- [Flutter](https://docs.flutter.dev/get-started/install/macos) 3.x（Dart 3.5 或更高）
 - [Rust](https://www.rust-lang.org/tools/install) 1.95 或更高版本
-- Xcode Command Line Tools：`xcode-select --install`
+- Xcode 15 或更高版本
+- CocoaPods：`brew install cocoapods`
 
 AI 提交说明功能还会调用 macOS 自带的 `curl`。
 
@@ -63,44 +64,14 @@ AI 提交说明功能还会调用 macOS 自带的 `curl`。
 
 ```bash
 git clone https://github.com/Ckales/CGit.git
-cd CGit
-```
-
-### Tauri 版
-
-```bash
-npm install
-npm run tauri dev
-```
-
-首次运行需要编译 Rust 依赖，耗时会明显长于后续启动。
-
-### Flutter 版
-
-另需安装 [Flutter](https://docs.flutter.dev/get-started/install/macos)、Xcode 15 或更高版本和 CocoaPods（`brew install cocoapods`）。
-
-```bash
-cd flutter_ui
+cd CGit/flutter_ui
 flutter pub get
 flutter run -d macos
 ```
 
-详见 [flutter_ui/README.md](flutter_ui/README.md)。
+首次运行需要编译 Rust 依赖，耗时会明显长于后续启动。
 
 ## 构建
-
-### Tauri 版
-
-```bash
-npm run tauri build
-```
-
-构建产物位于 `src-tauri/target/release/bundle/`，macOS 下通常包括：
-
-- `macos/cgit.app`
-- `dmg/cgit_0.1.0_<arch>.dmg`
-
-### Flutter 版
 
 ```bash
 cd flutter_ui
@@ -126,12 +97,9 @@ CGit 的本地读取主要使用 [gitoxide](https://github.com/GitoxideLabs/gito
 
 ## 配置与隐私
 
-界面偏好、最近仓库路径和可选 AI 配置保存在应用 WebView 的 `localStorage` 中，不在项目仓库内：
+界面偏好、最近仓库路径和 AI 服务配置（含 AI Token）保存在应用的 `shared_preferences` 中，不在项目仓库内。
 
-- `cgit.prefs`：主题、字号、布局、编辑器、AI 地址、模型、提示词和 Token
-- `cgit.recentRepos`：最近打开的仓库路径
-
-Tauri 版的 AI Token 以明文保存在本机 WebKit LocalStorage；Flutter 版的 AI Token 保存在系统钥匙串，其余偏好保存在 `shared_preferences`。使用 AI 生成功能时，CGit 会把系统提示词和**已暂存的 diff** 发送到你配置的 OpenAI-compatible `/chat/completions` 服务。请勿在不可信设备上保存 Token，也不要把含敏感代码的 diff 发给不可信服务。
+使用 AI 生成功能时，CGit 会把系统提示词和**已暂存的 diff** 发送到你配置的 OpenAI-compatible `/chat/completions` 服务。请不要把含敏感代码的 diff 发给不可信服务。
 
 Git 用户名和邮箱由 Git 自己管理，写入当前仓库的 `.git/config` 或全局 `~/.gitconfig`。
 
@@ -141,7 +109,6 @@ Git 用户名和邮箱由 Git 自己管理，写入当前仓库的 `.git/config`
 | --- | --- |
 | `⌘ O` | 打开仓库或工作区 |
 | `⌘ ↵` | 打开提交窗口 / 执行提交 |
-| `⇧ ⌘ ↵` | 提交并推送 |
 | `⌘ T` / `⌘ L` / `⌘ P` | 抓取 / 拉取 / 推送 |
 | `⌘ R` | 刷新 |
 | `⌘ N` | 新建分支 |
@@ -152,21 +119,17 @@ Git 用户名和邮箱由 Git 自己管理，写入当前仓库的 `.git/config`
 ## 开发
 
 ```bash
-npm test
 (cd crates/cgit-core && cargo test)
-(cd src-tauri && cargo test)
-npm run build
 (cd flutter_ui && flutter analyze && flutter test)
 ```
 
 项目结构：
 
 ```text
-src/                    前端界面（HTML/CSS/JavaScript）
-test/                   前端单元测试
 crates/cgit-core/       Git 核心逻辑（gix + git CLI）
-src-tauri/              Tauri 桌面壳与命令绑定
-flutter_ui/             Flutter 桌面界面
+flutter_ui/lib/         Flutter 界面
+flutter_ui/rust/        flutter_rust_bridge 绑定
+flutter_ui/test/        界面与文本逻辑测试
 ```
 
 ## 参与贡献

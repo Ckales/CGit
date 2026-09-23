@@ -9,9 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// app's own container. Same durability, same scope — and unlike localStorage
 /// it survives a change of web view.
 ///
-/// The AI token deliberately does not live here. It is the one setting worth
-/// the Keychain rather than a readable plist, and it lands when the AI feature
-/// does rather than being stubbed in now.
+/// AI settings (token included) live in [AiSettings], same store.
 class Prefs {
   Prefs._(this._store);
 

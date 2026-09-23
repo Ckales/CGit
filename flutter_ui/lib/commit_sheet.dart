@@ -408,7 +408,7 @@ class _CommitSheetState extends State<CommitSheet> {
           onToggle: forceOpen ? null : () => _toggleNode(key),
           check: _groupCheck(p, dirFiles),
           children: [
-            _FolderIcon(color: p.textDim),
+            FolderIcon(color: p.textDim),
             const SizedBox(width: 6),
             Flexible(
               child: Text(
@@ -527,7 +527,7 @@ class _CommitSheetState extends State<CommitSheet> {
           ? _DiscardButton(onTap: () => widget.onDiscard!(f))
           : null,
       children: [
-        _Badge(status: f.status),
+        StatusBadge(status: f.status),
         const SizedBox(width: 8),
         Expanded(
           child: Text(
@@ -617,6 +617,7 @@ class _CommitSheetState extends State<CommitSheet> {
                     : (pos) => showRepoMenu(
                           context: context,
                           position: pos,
+                          alignRight: true,
                           items: [
                             MenuAction('提交并推送', () => _commit(push: true)),
                           ],
@@ -695,7 +696,7 @@ class _TreeRowState extends State<_TreeRow> {
           child: Row(
             children: [
               if (!widget.leaf) ...[
-                _Disclosure(open: widget.open, color: p.textDim),
+                Disclosure(open: widget.open, color: p.textDim),
                 const SizedBox(width: 6),
               ],
               widget.check,
@@ -720,8 +721,8 @@ class _TreeRowState extends State<_TreeRow> {
 
 /// The `border: 4px solid transparent; border-left-color` triangle the Tauri
 /// summary rows draw, turned 90° when open.
-class _Disclosure extends StatelessWidget {
-  const _Disclosure({required this.open, required this.color});
+class Disclosure extends StatelessWidget {
+  const Disclosure({super.key, required this.open, required this.color});
   final bool open;
   final Color color;
 
@@ -752,8 +753,8 @@ class _TrianglePainter extends CustomPainter {
 }
 
 /// `.tree-folder-icon`: a 13×9 outline with a small tab on top.
-class _FolderIcon extends StatelessWidget {
-  const _FolderIcon({required this.color});
+class FolderIcon extends StatelessWidget {
+  const FolderIcon({super.key, required this.color});
   final Color color;
 
   @override
@@ -789,8 +790,8 @@ class _FolderPainter extends CustomPainter {
 }
 
 /// `.badge`: a 16px square with the status initial.
-class _Badge extends StatelessWidget {
-  const _Badge({required this.status});
+class StatusBadge extends StatelessWidget {
+  const StatusBadge({super.key, required this.status});
   final String status;
 
   @override
@@ -1089,7 +1090,8 @@ class _BtnState extends State<_Btn> {
         onTap: widget.onTap,
         onTapUp: widget.onTapAt == null
             ? null
-            : (_) => widget.onTapAt!(menuAnchorBelow(context)),
+            : (_) => widget.onTapAt!(
+                menuAnchorBelow(context, right: widget.joinLeft)),
         onSecondaryTap: widget.onSecondaryTap,
         child: Opacity(
           opacity: enabled ? 1 : 0.45,

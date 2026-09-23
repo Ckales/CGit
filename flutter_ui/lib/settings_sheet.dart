@@ -161,12 +161,8 @@ class _SettingsSheetState extends State<SettingsSheet> {
         _aiModel.text = ai.model;
         _aiPrompt.text = ai.prompt;
       });
-      try {
-        final has = await ai.readToken() != null;
-        if (mounted) setState(() => _aiTokenStored = has);
-      } on GitError catch (e) {
-        if (mounted) _report(e.message, isError: true);
-      }
+      final has = await ai.readToken() != null;
+      if (mounted) setState(() => _aiTokenStored = has);
     }
   }
 
@@ -214,12 +210,7 @@ class _SettingsSheetState extends State<SettingsSheet> {
       await ai.setModel(_aiModel.text);
       await ai.setPrompt(_aiPrompt.text);
       if (_aiToken.text.trim().isNotEmpty) {
-        try {
-          await ai.writeToken(_aiToken.text);
-        } on PlatformException catch (e) {
-          if (mounted) _report('令牌写入钥匙串失败：${e.message}', isError: true);
-          return;
-        }
+        await ai.writeToken(_aiToken.text);
       }
     }
 
@@ -689,7 +680,7 @@ class _SettingsSheetState extends State<SettingsSheet> {
           p,
           '令牌',
           _input(p, _aiToken,
-              obscure: true, hint: _aiTokenStored ? '已保存在钥匙串，留空则不变' : 'sk-…'),
+              obscure: true, hint: _aiTokenStored ? '已保存，留空则不变' : 'sk-…'),
         ),
         _row(p, '模型', _input(p, _aiModel, hint: 'gpt-4o-mini')),
         _wideRow(
@@ -712,7 +703,7 @@ class _SettingsSheetState extends State<SettingsSheet> {
             p,
             '兼容 OpenAI 的 /chat/completions 接口。填基址即可，会自动补 /chat/completions。'
             '配置好后点提交按钮左边的 ✦ 图标，用已暂存的 diff 生成提交说明。'),
-        _hint(p, '令牌保存在系统钥匙串，不写入偏好文件。'),
+        _hint(p, '令牌保存在本机应用偏好中，生成时会把暂存区 diff 发送到上面的地址。'),
         _testRow(p, '测试', _aiBusy ? null : _testAi, _aiResult, _aiFailed),
       ];
 

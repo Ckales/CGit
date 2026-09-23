@@ -1,5 +1,6 @@
 import 'package:flutter/widgets.dart';
 
+import 'context_menu.dart';
 import 'git_text.dart';
 import 'theme.dart';
 
@@ -19,12 +20,16 @@ class HistoryView extends StatelessWidget {
     required this.selected,
     required this.onSelect,
     required this.controller,
+    this.menuFor,
   });
 
   final GraphLayout layout;
   final String? selected;
   final void Function(GraphCommit commit) onSelect;
   final ScrollController controller;
+
+  /// Built per open so the entries can depend on current state.
+  final List<MenuAction> Function(GraphCommit commit)? menuFor;
 
   @override
   Widget build(BuildContext context) {
@@ -38,12 +43,17 @@ class HistoryView extends StatelessWidget {
       itemBuilder: (context, i) {
         final row = layout.rows[i];
         final isSelected = row.commit.id == selected;
-        return _CommitRow(
+        final rowWidget = _CommitRow(
           row: row,
           gutter: gutter,
           selected: isSelected,
           palette: palette,
           onTap: () => onSelect(row.commit),
+        );
+        if (menuFor == null) return rowWidget;
+        return ContextMenuRegion(
+          items: () => menuFor!(row.commit),
+          child: rowWidget,
         );
       },
     );

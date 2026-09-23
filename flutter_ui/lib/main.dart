@@ -1,7 +1,10 @@
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'blame_view.dart';
+import 'branch_menu.dart';
+import 'commit_menu.dart';
 import 'commit_sheet.dart';
 import 'context_menu.dart';
 import 'diff_view.dart';
@@ -10,6 +13,8 @@ import 'git_text.dart';
 import 'history_view.dart';
 import 'merge_view.dart';
 import 'network_ops.dart';
+import 'prefs.dart';
+import 'prompt.dart';
 import 'theme.dart';
 
 Future<void> main(List<String> args) async {
@@ -17,22 +22,29 @@ Future<void> main(List<String> args) async {
   // this resolves, so it blocks rather than racing the first repo load.
   WidgetsFlutterBinding.ensureInitialized();
   await initGitBridge();
+  final prefs = await Prefs.load();
 
-  // The repo comes from argv so the app has something to show without a file
-  // picker. Opening a folder needs the file_selector plugin — see README.
-  runApp(CGitApp(startPath: args.isEmpty ? defaultRepoPath : args.first));
+  // argv wins when given, then the most recently opened repo, then the working
+  // directory — so relaunching lands where the user left off.
+  final start = args.isNotEmpty
+      ? args.first
+      : (prefs.recentRepos.firstOrNull ?? defaultRepoPath);
+
+  runApp(CGitApp(startPath: start, prefs: prefs));
 }
 
 class CGitApp extends StatefulWidget {
-  const CGitApp({super.key, required this.startPath});
+  const CGitApp({super.key, required this.startPath, required this.prefs});
   final String startPath;
+  final Prefs prefs;
 
   @override
   State<CGitApp> createState() => _CGitAppState();
 }
 
 class _CGitAppState extends State<CGitApp> {
-  Palette _palette = Palette.dark;
+  late Palette _palette =
+      widget.prefs.isDark ? Palette.dark : Palette.light;
 
   @override
   Widget build(BuildContext context) {
@@ -50,10 +62,12 @@ class _CGitAppState extends State<CGitApp> {
           type: MaterialType.transparency,
           child: RepoScreen(
             startPath: widget.startPath,
-            onToggleTheme: () => setState(
-              () => _palette =
-                  _palette == Palette.dark ? Palette.light : Palette.dark,
-            ),
+            prefs: widget.prefs,
+            onToggleTheme: () {
+              final dark = _palette != Palette.dark;
+              setState(() => _palette = dark ? Palette.dark : Palette.light);
+              widget.prefs.setDark(dark);
+            },
           ),
         ),
       ),
@@ -92,9 +106,14 @@ class BlameTarget extends DiffTarget {
 }
 
 class RepoScreen extends StatefulWidget {
-  const RepoScreen(
-      {super.key, required this.startPath, required this.onToggleTheme});
+  const RepoScreen({
+    super.key,
+    required this.startPath,
+    required this.prefs,
+    required this.onToggleTheme,
+  });
   final String startPath;
+  final Prefs prefs;
   final VoidCallback onToggleTheme;
 
   @override
@@ -119,7 +138,8 @@ class _RepoScreenState extends State<RepoScreen> {
   List<String> _hunks = const [];
   List<BlameLine> _blame = const [];
 
-  DiffMode _mode = DiffMode.split;
+  late DiffMode _mode =
+      widget.prefs.isSplitDiff ? DiffMode.split : DiffMode.unified;
   bool _commitOpen = false;
 
   /// Files still carrying conflict markers, and which multi-step operation the
@@ -143,8 +163,8 @@ class _RepoScreenState extends State<RepoScreen> {
   String? _mergeFile;
   String _mergeContent = '';
 
-  double _sidebarWidth = 220;
-  double _historyHeight = 260;
+  late double _sidebarWidth = widget.prefs.sidebarWidth ?? 220;
+  late double _historyHeight = widget.prefs.historyHeight ?? 260;
 
   final _historyScroll = ScrollController();
 
@@ -173,6 +193,7 @@ class _RepoScreenState extends State<RepoScreen> {
       _git = Git(repo.path);
       _repoName = repo.name;
     });
+    await widget.prefs.rememberRepo(repo.path);
     await _refresh();
   }
 
@@ -239,6 +260,136 @@ class _RepoScreenState extends State<RepoScreen> {
     }
   }
 
+  /* ---------- history ---------- */
+
+  List<MenuAction> _commitMenu(GraphCommit c) => commitMenu(
+        run: (cmd) => switch (cmd) {
+          CommitCommand.resetMixed =>
+            _stashAction('重置到 ${_short(c)}', () => _git!.resetTo(c.id, 'mixed')),
+          CommitCommand.resetSoft =>
+            _stashAction('重置到 ${_short(c)}', () => _git!.resetTo(c.id, 'soft')),
+          CommitCommand.resetHard => _stashAction(
+              '重置到 ${_short(c)}',
+              () => _git!.resetTo(c.id, 'hard'),
+              // The only entry here that throws away work git cannot give back.
+              confirm: 'hard 重置到 ${_short(c)}「${c.summary}」？\n\n'
+                  '当前所有未提交的改动会被丢弃，且无法通过 reflog 找回。',
+            ),
+          CommitCommand.revert =>
+            _stashAction('回退 ${_short(c)}', () => _git!.revert(c.id)),
+          CommitCommand.cherryPick =>
+            _stashAction('拣选 ${_short(c)}', () => _git!.cherryPick(c.id)),
+          CommitCommand.rebaseFrom => _notYet('交互式变基'),
+          CommitCommand.tag => _newTag(oid: c.id),
+          CommitCommand.patchToClipboard => _patchToClipboard(c),
+          CommitCommand.patchToFile => _patchToFile(c),
+        },
+      );
+
+  String _short(GraphCommit c) => c.id.substring(0, 7);
+
+  /// Entries whose backing UI is not built yet say so instead of doing nothing —
+  /// a menu item that silently no-ops reads as a broken app.
+  void _notYet(String what) {
+    setState(() => _status = '$what 还没做');
+  }
+
+  Future<void> _patchToClipboard(GraphCommit c) async {
+    final git = _git;
+    if (git == null) return;
+    try {
+      final patch = await git.commitPatch(c.id);
+      await git.copyToClipboard(patch);
+      if (mounted) setState(() => _status = '已复制 ${_short(c)} 的补丁到剪贴板');
+    } on GitError catch (e) {
+      if (mounted) setState(() => _status = e.message);
+    }
+  }
+
+  Future<void> _newTag({String? oid}) async {
+    final name = await promptText(
+      context,
+      title: oid == null ? '在 HEAD 上打标签' : '在 ${oid.substring(0, 7)} 上打标签',
+      hint: '标签名',
+      confirmLabel: '创建',
+    );
+    if (name == null || name.trim().isEmpty) return;
+    await _stashAction(
+      '打标签 ${name.trim()}',
+      () => _git!.createTag(name.trim(), oid: oid),
+    );
+  }
+
+  /* ---------- branches ---------- */
+
+  /// Wraps a branch command with confirm / report / refresh. Void commands pass
+  /// a message of their own since git says nothing on success.
+  Future<void> _branchAction(
+    String done,
+    Future<void> Function() action, {
+    String? confirm,
+  }) async {
+    if (_git == null) return;
+    if (confirm != null && !await _confirm(title: done, body: confirm)) return;
+    try {
+      await action();
+      await _refresh();
+      if (mounted) setState(() => _status = done);
+    } on GitError catch (e) {
+      if (mounted) setState(() => _status = e.message);
+    }
+  }
+
+  List<MenuAction> _branchMenu(BranchInfo b) => branchMenu(
+        branch: b,
+        currentBranch: _branch,
+        run: (cmd) => switch (cmd) {
+          BranchCommand.checkout => _branchAction(
+              '已切换到 ${b.name}', () => _git!.checkout(b.name)),
+          BranchCommand.newFrom => _newBranch(base: b.name),
+          BranchCommand.mergeInto =>
+            _stashAction('合并 ${b.name}', () => _git!.mergeBranch(b.name)),
+          BranchCommand.update =>
+            _stashAction('更新 ${b.name}', () => _git!.updateBranch(b.name)),
+          BranchCommand.push =>
+            _network('推送 ${b.name}', () => _git!.pushBranch(b.name)),
+          BranchCommand.rename => _renameBranch(b.name),
+          BranchCommand.delete => _branchAction(
+              '已删除分支 ${b.name}',
+              () => _git!.deleteBranch(b.name),
+              confirm: '删除分支「${b.name}」？未合并的提交只能靠 reflog 找回。',
+            ),
+        },
+      );
+
+  Future<void> _newBranch({String? base}) async {
+    final name = await promptText(
+      context,
+      title: base == null ? '新建分支' : "从 '$base' 新建分支",
+      hint: '分支名',
+      confirmLabel: '创建并检出',
+    );
+    if (name == null || name.trim().isEmpty) return;
+    await _branchAction(
+      '已创建并检出 ${name.trim()}',
+      () => _git!.createBranch(name.trim(), base: base),
+    );
+  }
+
+  Future<void> _renameBranch(String name) async {
+    final next = await promptText(
+      context,
+      title: '重命名分支',
+      initial: name,
+      confirmLabel: '重命名',
+    );
+    if (next == null || next.trim().isEmpty || next.trim() == name) return;
+    await _branchAction(
+      '已重命名为 ${next.trim()}',
+      () => _git!.renameBranch(name, next.trim()),
+    );
+  }
+
   List<MenuAction> _fileMenu(FileStatus f) => [
         MenuAction(f.staged ? '取消暂存' : '暂存', () {
           _stashAction(
@@ -255,6 +406,39 @@ class _RepoScreenState extends State<RepoScreen> {
         }),
         MenuAction('逐行归属 (blame)', () => _showBlame(f.path)),
       ];
+
+  /// Pick a repository (or a folder of sibling repos) with the native dialog.
+  ///
+  /// The sandbox is off, so a chosen path stays readable for the whole session
+  /// without security-scoped bookmarks. Turning the sandbox back on — which a
+  /// Mac App Store build would require — makes those mandatory and rules out
+  /// the argv path entirely.
+  Future<void> _pickRepo() async {
+    final dir = await getDirectoryPath(confirmButtonText: '打开');
+    if (dir == null) return;
+    await _openRepo(dir);
+  }
+
+  Future<void> _patchToFile(GraphCommit c) async {
+    final git = _git;
+    if (git == null) return;
+    try {
+      final patch = await git.commitPatch(c.id);
+      final location = await getSaveLocation(
+        // format-patch's own naming: 0001-subject.patch. Keeping the shape
+        // means the other end can `git am` a directory of them in order.
+        suggestedName: patchFileName(c.summary),
+        acceptedTypeGroups: const [
+          XTypeGroup(label: 'patch', extensions: ['patch', 'diff']),
+        ],
+      );
+      if (location == null) return;
+      await git.savePatch(location.path, patch);
+      if (mounted) setState(() => _status = '已导出补丁到 ${location.path}');
+    } on GitError catch (e) {
+      if (mounted) setState(() => _status = e.message);
+    }
+  }
 
   Future<void> _showBlame(String file) async {
     final git = _git;
@@ -589,7 +773,15 @@ class _RepoScreenState extends State<RepoScreen> {
                             palette: p,
                             onDrag: (d) => setState(() => _sidebarWidth =
                                 (_sidebarWidth + d).clamp(140.0, 480.0)),
-                            onReset: () => setState(() => _sidebarWidth = 220),
+                            // Written on release, not on every drag frame: one
+                            // drag produces dozens of updates and the plist does
+                            // not need to see each of them.
+                            onDragEnd: () =>
+                                widget.prefs.setSidebarWidth(_sidebarWidth),
+                            onReset: () {
+                              setState(() => _sidebarWidth = 220);
+                              widget.prefs.setSidebarWidth(220);
+                            },
                           ),
                           Expanded(child: _mainRight(p)),
                         ],
@@ -655,6 +847,26 @@ class _RepoScreenState extends State<RepoScreen> {
               label: '拉取', enabled: _git != null && !_netBusy, onTap: _pull),
           _ToolButton(
               label: '抓取', enabled: _git != null && !_netBusy, onTap: _fetch),
+          _ToolButton(
+            label: '打开…',
+            enabled: true,
+            onTap: _pickRepo,
+            // Right-click reaches the recent list without a dialog; left-click
+            // still goes straight to the picker, which is what a fresh install
+            // needs and what an empty list would offer anyway.
+            onSecondaryTapAt: (pos) {
+              final recent = widget.prefs.recentRepos;
+              if (recent.isEmpty) return;
+              showRepoMenu(
+                context: context,
+                position: pos,
+                items: [
+                  for (final path in recent)
+                    MenuAction(path.split('/').last, () => _openRepo(path)),
+                ],
+              );
+            },
+          ),
           _ToolButton(label: '刷新', enabled: _git != null, onTap: _refresh),
           _ToolButton(
             label: _mode == DiffMode.split ? '并排' : '统一',
@@ -677,18 +889,55 @@ class _RepoScreenState extends State<RepoScreen> {
       child: ListView(
         padding: const EdgeInsets.symmetric(vertical: 6),
         children: [
-          _SectionHead(label: '分支', palette: p),
+          _SectionHead(
+            label: '分支',
+            palette: p,
+            action: _git == null
+                ? null
+                : _SectionAction('＋', '新建分支', () => _newBranch()),
+          ),
           for (final b in _branches)
-            _SidebarRow(
-              label: b.name,
-              palette: p,
-              active: b.isCurrent,
-              leading: b.isCurrent ? '●' : null,
+            ContextMenuRegion(
+              items: () => _branchMenu(b),
+              child: _SidebarRow(
+                label: b.name,
+                palette: p,
+                active: b.isCurrent,
+                leading: b.isCurrent ? '●' : null,
+                // Left click checks out, like the Tauri version; the menu holds
+                // everything else.
+                onTap: b.isCurrent
+                    ? null
+                    : () => _branchAction(
+                          '已切换到 ${b.name}',
+                          () => _git!.checkout(b.name),
+                        ),
+              ),
             ),
           _SectionHead(label: '远端', palette: p),
           for (final r in _remotes) _SidebarRow(label: r.name, palette: p),
-          _SectionHead(label: '标签', palette: p),
-          for (final t in _tags) _SidebarRow(label: t, palette: p),
+          _SectionHead(
+            label: '标签',
+            palette: p,
+            action: _git == null
+                ? null
+                : _SectionAction('＋', '在 HEAD 上打标签', () => _newTag()),
+          ),
+          for (final tag in _tags)
+            ContextMenuRegion(
+              items: () => [
+                MenuAction(
+                  '删除标签',
+                  () => _stashAction(
+                    '删除标签 $tag',
+                    () => _git!.deleteTag(tag),
+                    confirm: '删除本地标签「$tag」？远端上的同名标签不受影响。',
+                  ),
+                  danger: true,
+                ),
+              ],
+              child: _SidebarRow(label: tag, palette: p),
+            ),
           _SectionHead(
             label: '储藏',
             palette: p,
@@ -750,6 +999,7 @@ class _RepoScreenState extends State<RepoScreen> {
                   selected: _selectedCommit?.id,
                   onSelect: _selectCommit,
                   controller: _historyScroll,
+                  menuFor: _commitMenu,
                 ),
               ),
             ],
@@ -763,7 +1013,11 @@ class _RepoScreenState extends State<RepoScreen> {
           palette: p,
           onDrag: (d) => setState(
               () => _historyHeight = (_historyHeight + d).clamp(80.0, 700.0)),
-          onReset: () => setState(() => _historyHeight = 260),
+          onDragEnd: () => widget.prefs.setHistoryHeight(_historyHeight),
+          onReset: () {
+            setState(() => _historyHeight = 260);
+            widget.prefs.setHistoryHeight(260);
+          },
         ),
         Expanded(child: _diffPane(p)),
       ],
@@ -959,12 +1213,16 @@ class _Splitter extends StatelessWidget {
     required this.palette,
     required this.onDrag,
     required this.onReset,
+    this.onDragEnd,
   });
 
   final Axis axis;
   final Palette palette;
   final void Function(double delta) onDrag;
   final VoidCallback onReset;
+
+  /// Called once when the drag finishes — the moment worth persisting.
+  final VoidCallback? onDragEnd;
 
   @override
   Widget build(BuildContext context) {
@@ -978,6 +1236,8 @@ class _Splitter extends StatelessWidget {
         onDoubleTap: onReset,
         onHorizontalDragUpdate: horizontal ? (d) => onDrag(d.delta.dx) : null,
         onVerticalDragUpdate: horizontal ? null : (d) => onDrag(d.delta.dy),
+        onHorizontalDragEnd: horizontal ? (_) => onDragEnd?.call() : null,
+        onVerticalDragEnd: horizontal ? null : (_) => onDragEnd?.call(),
         child: Container(
           width: horizontal ? 7 : null,
           height: horizontal ? null : 7,
@@ -994,10 +1254,14 @@ class _ToolButton extends StatefulWidget {
     required this.enabled,
     required this.onTap,
     this.tooltip,
+    this.onSecondaryTapAt,
   });
   final String label;
   final bool enabled;
   final VoidCallback onTap;
+
+  /// A right-click alternative, handed the pointer position for a menu.
+  final void Function(Offset position)? onSecondaryTapAt;
 
   /// Where a push would land, for the push button: `main → origin : main`.
   final String? tooltip;
@@ -1019,6 +1283,9 @@ class _ToolButtonState extends State<_ToolButton> {
       onExit: (_) => setState(() => _hover = false),
       child: GestureDetector(
         onTap: widget.enabled ? widget.onTap : null,
+        onSecondaryTapUp: widget.onSecondaryTapAt == null
+            ? null
+            : (d) => widget.onSecondaryTapAt!(d.globalPosition),
         child: Container(
           margin: const EdgeInsets.only(left: 6),
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),

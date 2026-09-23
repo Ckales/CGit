@@ -698,3 +698,24 @@ TreeNode _closeTree(_MutableNode node, bool collapseSingleChild) {
   }
   return TreeNode(cur.name, dirs, own, count);
 }
+
+/* ---------- patch file names ---------- */
+
+/// The filename `git format-patch` would give a commit: a numbered prefix, the
+/// summary reduced to what a filesystem will take, and `.patch`.
+///
+/// Truncation walks runes rather than code units. A summary is free-form text
+/// and may hold an emoji; cutting at a UTF-16 boundary would leave half a
+/// surrogate pair in the name — the same hazard intraLineDiff avoids.
+String patchFileName(String summary, {int maxLength = 50}) {
+  final cleaned = summary
+      .replaceAll(RegExp(r'[^\w\u4e00-\u9fff]+'), '-')
+      .replaceAll(RegExp(r'^-+|-+$'), '');
+  if (cleaned.isEmpty) return '0001-patch.patch';
+
+  final runes = cleaned.runes.toList();
+  final slug = runes.length <= maxLength
+      ? cleaned
+      : String.fromCharCodes(runes.sublist(0, maxLength));
+  return '0001-$slug.patch';
+}

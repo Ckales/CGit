@@ -145,6 +145,79 @@ class Git {
   Future<List<BlameLine>> blame(String file) =>
       _guard(() => rust.getBlame(path: repo, file: file));
 
+  /* ---------- history ---------- */
+
+  /// Move HEAD to `oid`. 'soft' keeps the index and worktree, 'mixed' resets the
+  /// index, 'hard' throws away uncommitted work — the caller confirms that one.
+  Future<String> resetTo(String oid, String mode) =>
+      _guard(() => rust.resetTo(path: repo, oid: oid, mode: mode));
+
+  /// A new commit that undoes `oid`, leaving history intact.
+  Future<String> revert(String oid) =>
+      _guard(() => rust.revertCommit(path: repo, oid: oid));
+
+  Future<String> cherryPick(String oid) =>
+      _guard(() => rust.cherryPick(path: repo, oid: oid));
+
+  /// Tag `oid`, or HEAD when it is null.
+  Future<String> createTag(String name, {String message = '', String? oid}) =>
+      _guard(() => rust.createTag(
+            path: repo,
+            name: name,
+            message: message,
+            oid: oid,
+          ));
+
+  /// One commit as a patch. Core uses `format-patch`, not `diff`, so the commit
+  /// message rides along in Subject and the other end can `git am` it into a
+  /// commit rather than only `git apply` it into the worktree.
+  Future<String> commitPatch(String oid) =>
+      _guard(() => rust.createCommitPatch(path: repo, oid: oid));
+
+  /// Goes through core rather than Flutter's own Clipboard so both frontends
+  /// put text on the pasteboard the same way.
+  Future<void> copyToClipboard(String text) =>
+      _guard(() => rust.writeClipboard(text: text));
+
+  Future<String> deleteTag(String name) =>
+      _guard(() => rust.deleteTag(path: repo, name: name));
+
+  /// Write a patch to disk. Core does the writing so the Tauri app and this one
+  /// produce byte-identical files.
+  Future<void> savePatch(String file, String content) =>
+      _guard(() => rust.savePatch(file: file, content: content));
+
+  /* ---------- branches ---------- */
+
+  /// Checkout goes through the git CLI in core, so post-checkout hooks and the
+  /// LFS smudge filter still run and local changes are carried across the way
+  /// git decides — not the way we would have to re-derive.
+  Future<void> checkout(String name) =>
+      _guard(() => rust.checkoutBranch(path: repo, name: name));
+
+  Future<void> createBranch(String name, {String? base, bool checkout = true}) =>
+      _guard(() => rust.createBranch(
+            path: repo,
+            name: name,
+            checkout: checkout,
+            base: base,
+          ));
+
+  Future<void> deleteBranch(String name) =>
+      _guard(() => rust.deleteBranch(path: repo, name: name));
+
+  Future<void> renameBranch(String name, String newName) =>
+      _guard(() => rust.renameBranch(path: repo, name: name, newName: newName));
+
+  /// Fast-forward a branch to its upstream without checking it out. A diverged
+  /// branch is reported rather than quietly rewritten.
+  Future<String> updateBranch(String name) =>
+      _guard(() => rust.updateBranch(path: repo, name: name));
+
+  /// Push one branch without checking it out.
+  Future<String> pushBranch(String name) =>
+      _guard(() => rust.pushBranch(path: repo, name: name));
+
   /* ---------- stash ---------- */
 
   Future<List<StashEntry>> stashList() => _guard(() => rust.stashList(path: repo));

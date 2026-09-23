@@ -50,6 +50,8 @@ String _dump(List<ConflictBlock> blocks) => jsonEncode([
     ]);
 
 void main() {
+  _patchFileNameTests();
+
   group('conflict markers', () {
     test('splits context, ours, base and theirs', () {
       final parsed = parseConflicts(conflicted);
@@ -306,6 +308,45 @@ void main() {
       // Uncollapsed, "api" and "v1" stay separate rows.
       expect(app.dirs.map((d) => d.name), ['api', 'core', 'services', 'utils']);
       expect(app.dirs.first.dirs.map((d) => d.name), ['v1']);
+    });
+  });
+}
+
+/// Appended: the patch filename helper. It feeds a native save dialog, so a
+/// malformed name is a dialog the user cannot dismiss cleanly.
+void _patchFileNameTests() {
+  group('patch file names', () {
+    test('keeps the format-patch shape', () {
+      expect(patchFileName('add login form'), '0001-add-login-form.patch');
+    });
+
+    test('keeps Chinese, drops punctuation', () {
+      expect(patchFileName('修复：提交弹窗的输入框'), '0001-修复-提交弹窗的输入框.patch');
+    });
+
+    test('never leaves a leading or trailing dash', () {
+      expect(patchFileName('  --- spaced ---  '), '0001-spaced.patch');
+    });
+
+    test('falls back when nothing usable is left', () {
+      expect(patchFileName('!!!___!!!'), isNot(contains('--')));
+      expect(patchFileName('！！！'), '0001-patch.patch');
+    });
+
+    test('strips emoji along with the rest of the punctuation', () {
+      // Emoji are neither \w nor CJK, so they never reach the truncation step.
+      // A summary that is only emoji cleans down to nothing.
+      expect(patchFileName('😀 fix the thing 🎉'), '0001-fix-the-thing.patch');
+      expect(patchFileName('🎉🎉🎉'), '0001-patch.patch');
+    });
+
+    test('truncates long summaries by character, not byte', () {
+      // Everything the cleaner keeps is single-code-unit today (ASCII word
+      // characters and BMP CJK), so this cannot split a surrogate pair — but
+      // the rune walk is what keeps that true if the allowed set ever widens.
+      final name = patchFileName('提' * 80, maxLength: 5);
+      expect(name, '0001-提提提提提.patch');
+      expect(patchFileName('a' * 80).length, '0001-.patch'.length + 50);
     });
   });
 }

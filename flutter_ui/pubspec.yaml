@@ -9,9 +9,11 @@ environment:
 dependencies:
   cgit_rust:
     path: rust_builder
+  file_selector: ^1.1.0
   flutter:
     sdk: flutter
   flutter_rust_bridge: 2.13.0
+  shared_preferences: ^2.5.5
 
 dev_dependencies:
   flutter_test:

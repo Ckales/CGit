@@ -790,23 +790,9 @@ class _RepoScreenState extends State<RepoScreen> {
     );
   }
 
+  /// The Tauri fileMenuItems: the past-commit menu plus 丢弃改动.
   List<MenuAction> _fileMenu(FileStatus f) => [
-        MenuAction(f.staged ? '取消暂存' : '暂存', () {
-          _stashAction(
-            f.staged ? '取消暂存' : '暂存',
-            () async {
-              if (f.staged) {
-                await _git!.unstage(f.path);
-              } else {
-                await _git!.stage(f.path);
-              }
-              return '';
-            },
-          );
-        }),
-        MenuAction('逐行归属 (blame)', () => _showBlame(f.path)),
-        MenuAction('在编辑器中打开', () => _openFile(f.path)),
-        MenuAction('文件历史', () => _showFileHistory(f.path)),
+        ..._commitFileMenu(f.path),
         MenuAction('丢弃改动', () => _discardFile(f), danger: true),
       ];
 
@@ -814,7 +800,8 @@ class _RepoScreenState extends State<RepoScreen> {
   /// has nothing to discard there. Editor, history and blame all act on the
   /// working-tree copy.
   List<MenuAction> _commitFileMenu(String path) => [
-        MenuAction('在编辑器中打开', () => _openFile(path)),
+        MenuAction('从项目打开', () => _openProjectAtFile(path)),
+        MenuAction('编辑文件', () => _openFile(path)),
         MenuAction('复制文件路径', () async {
           final full = '$_repoPath/$path';
           await _git!.copyToClipboard(full);
@@ -848,6 +835,19 @@ class _RepoScreenState extends State<RepoScreen> {
   Future<void> _openFile(String file) async {
     try {
       await _git!.openInEditor(file, editor: widget.prefs.editor);
+    } on GitError catch (e) {
+      if (mounted) setState(() => _status = e.message);
+    }
+  }
+
+  /// The toolbar's 打开项目 plus the file — same project and same editor.
+  Future<void> _openProjectAtFile(String file) async {
+    try {
+      await _git!.openProjectWithFile(
+        file,
+        project: _workspaceRoot,
+        editor: _projectEditor,
+      );
     } on GitError catch (e) {
       if (mounted) setState(() => _status = e.message);
     }
@@ -1564,16 +1564,6 @@ class _RepoScreenState extends State<RepoScreen> {
       items: [
         MenuAction('打开…', _pickRepo),
         MenuAction('克隆仓库…', () => setState(() => _cloneOpen = true)),
-        if (_workspaceRepos.length > 1) ...[
-          const MenuAction.header('工作区仓库'),
-          for (final r in _workspaceRepos)
-            MenuAction(
-              r.name,
-              () => _openRepo(r.path),
-              sublabel: r.branch,
-              current: r.path == _repoPath,
-            ),
-        ],
         if (recent.isNotEmpty) ...[
           const MenuAction.header('最近的项目'),
           for (final path in recent)
@@ -1638,9 +1628,11 @@ class _RepoScreenState extends State<RepoScreen> {
             _SectionHead(label: '仓库', palette: p),
             for (final r in _workspaceRepos)
               _SidebarRow(
-                label: r.branch.isEmpty ? r.name : '${r.name} — ${r.branch}',
+                label: r.name,
+                badge: r.branch.isEmpty ? null : r.branch,
                 palette: p,
-                active: r.path == _repoPath,
+                bold: r.path == _repoPath,
+                tooltip: r.path,
                 onTap: () => _openRepo(r.path),
               ),
           ],
@@ -2645,9 +2637,18 @@ class _SidebarRow extends StatefulWidget {
     this.tooltip,
     this.indent = 0,
     this.icon,
+    this.badge,
+    this.bold = false,
   });
 
   final String label;
+
+  /// Small bordered tag after the label — the repo list's branch name.
+  final String? badge;
+
+  /// Marks the current entry by weight instead of the [active] fill, the way
+  /// the Tauri repo list does.
+  final bool bold;
   final Palette palette;
 
   /// Extra left padding, for tree rows.
@@ -2714,14 +2715,36 @@ class _SidebarRowState extends State<_SidebarRow> {
                   ),
                 ),
               ],
-              Expanded(
+              Flexible(
                 child: Text(
                   widget.label,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: ui.copyWith(color: p.text),
+                  style: ui.copyWith(
+                    color: p.text,
+                    fontWeight: widget.bold ? FontWeight.w600 : null,
+                  ),
                 ),
               ),
+              if (widget.badge != null) ...[
+                const SizedBox(width: 6),
+                Flexible(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 5),
+                    decoration: BoxDecoration(
+                      color: p.bgElev,
+                      border: Border.all(color: p.border),
+                      borderRadius: BorderRadius.circular(3),
+                    ),
+                    child: Text(
+                      widget.badge!,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: ui.copyWith(fontSize: 10, color: p.textDim),
+                    ),
+                  ),
+                ),
+              ],
             ],
           ),
         ),

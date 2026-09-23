@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'ai_settings.dart';
+import 'batch_commit_sheet.dart';
 import 'blame_view.dart';
 import 'branch_menu.dart';
 import 'clone_sheet.dart';
@@ -199,6 +200,7 @@ class _RepoScreenState extends State<RepoScreen> {
   bool _commitDocked = false;
   bool _settingsOpen = false;
   bool _cloneOpen = false;
+  bool _batchCommitOpen = false;
 
   /// Sibling repositories found alongside the open one, for the workspace
   /// switcher. A single-repo folder leaves this at one entry and the switcher
@@ -1447,6 +1449,8 @@ class _RepoScreenState extends State<RepoScreen> {
           // whatever happens to be listed first.
           if (_cloneOpen) {
             setState(() => _cloneOpen = false);
+          } else if (_batchCommitOpen) {
+            setState(() => _batchCommitOpen = false);
           } else if (_settingsOpen) {
             setState(() => _settingsOpen = false);
           } else if (_rebasePlan != null) {
@@ -1503,6 +1507,19 @@ class _RepoScreenState extends State<RepoScreen> {
                     onCloned: (path) {
                       setState(() => _cloneOpen = false);
                       _openRepo(path);
+                    },
+                  ),
+                if (_batchCommitOpen)
+                  BatchCommitSheet(
+                    repos: _workspaceRepos,
+                    onClose: () => setState(() => _batchCommitOpen = false),
+                    onChanged: _refresh,
+                    onDone: (summary) {
+                      setState(() {
+                        _batchCommitOpen = false;
+                        _status = summary;
+                      });
+                      _refresh();
                     },
                   ),
                 if (_rebasePlan != null)
@@ -1739,7 +1756,12 @@ class _RepoScreenState extends State<RepoScreen> {
           // Only with siblings: a 仓库 list holding one entry is a heading that
           // tells you nothing, which is why the Tauri sidebar hides it too.
           if (_workspaceRepos.length > 1) ...[
-            _SectionHead(label: '仓库', palette: p),
+            _SectionHead(
+              label: '仓库',
+              palette: p,
+              action: _SectionAction('☑', '批量提交',
+                  () => setState(() => _batchCommitOpen = true)),
+            ),
             for (final r in _workspaceRepos)
               // Not a ContextMenuRegion: the menu lists the repo's branches,
               // which have to be read before it can open.

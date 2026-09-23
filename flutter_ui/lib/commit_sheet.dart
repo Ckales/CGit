@@ -564,18 +564,18 @@ class _CommitSheetState extends State<CommitSheet> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _MessageBox(controller: _message),
+        MessageBox(controller: _message),
         const SizedBox(height: 8),
         Row(
           children: [
-            _Check(
+            CheckLabel(
               label: '修正提交',
               tooltip: '修补上一个提交而不新建提交',
               value: _amend,
               onChanged: _busy ? null : _toggleAmend,
             ),
             const SizedBox(width: 14),
-            _Check(
+            CheckLabel(
               label: 'Sign-off 提交',
               tooltip: '在提交说明末尾追加 Signed-off-by',
               value: _signoff,
@@ -924,15 +924,15 @@ class _DiscardButtonState extends State<_DiscardButton> {
 }
 
 /// The Tauri `textarea`: 70px, own background, accent border on focus.
-class _MessageBox extends StatefulWidget {
-  const _MessageBox({required this.controller});
+class MessageBox extends StatefulWidget {
+  const MessageBox({super.key, required this.controller});
   final TextEditingController controller;
 
   @override
-  State<_MessageBox> createState() => _MessageBoxState();
+  State<MessageBox> createState() => _MessageBoxState();
 }
 
-class _MessageBoxState extends State<_MessageBox> {
+class _MessageBoxState extends State<MessageBox> {
   final _focus = FocusNode();
 
   @override
@@ -1014,8 +1014,9 @@ class _Field extends StatelessWidget {
 
 /// A labelled checkbox drawn in the app's own palette rather than Material's,
 /// so it matches the rest of the sheet.
-class _Check extends StatelessWidget {
-  const _Check({
+class CheckLabel extends StatelessWidget {
+  const CheckLabel({
+    super.key,
     required this.label,
     required this.tooltip,
     required this.value,

@@ -11,6 +11,8 @@ enum BranchCommand {
   push,
   rename,
   delete,
+  applyPatchFromFile,
+  applyPatchFromClipboard,
 }
 
 /// Build the context menu for one branch row.
@@ -38,6 +40,14 @@ List<MenuAction> branchMenu({
       ),
     MenuAction('更新', () => run(BranchCommand.update)),
     MenuAction('推送', () => run(BranchCommand.push)),
+    // A patch lands in the working tree, and that only ever belongs to the
+    // checked-out branch — offering these elsewhere would either lie or smuggle
+    // in a checkout. Flattened from the Tauri submenu: the choice is binary.
+    if (branch.isCurrent) ...[
+      MenuAction('应用补丁（从文件）…', () => run(BranchCommand.applyPatchFromFile)),
+      MenuAction('应用补丁（从剪贴板）',
+          () => run(BranchCommand.applyPatchFromClipboard)),
+    ],
     MenuAction('重命名…', () => run(BranchCommand.rename)),
     MenuAction(
       '删除',

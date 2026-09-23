@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 
+import 'ai_settings.dart';
+import 'context_menu.dart';
 import 'git.dart';
+import 'git_text.dart';
 import 'theme.dart';
 
 /// The commit modal. In the DOM version this markup sits in index.html behind
@@ -15,6 +18,7 @@ class CommitSheet extends StatefulWidget {
     required this.onClose,
     required this.onChanged,
     required this.onPickFile,
+    this.ai,
   });
 
   final List<FileStatus> changes;
@@ -23,19 +27,92 @@ class CommitSheet extends StatefulWidget {
   final Future<void> Function() onChanged;
   final void Function(FileStatus file) onPickFile;
 
+  /// Null when AI settings have not loaded; the generate button stays disabled.
+  final AiSettings? ai;
+
   @override
   State<CommitSheet> createState() => _CommitSheetState();
 }
 
 class _CommitSheetState extends State<CommitSheet> {
   final _message = TextEditingController();
+  final _author = TextEditingController();
   String? _error;
   bool _busy = false;
+  bool _amend = false;
+  bool _signoff = false;
+  bool _generating = false;
 
   @override
   void dispose() {
     _message.dispose();
+    _author.dispose();
     super.dispose();
+  }
+
+  /// Amending starts from HEAD's message, the way `git commit --amend` does —
+  /// otherwise the user retypes what they are amending.
+  Future<void> _toggleAmend(bool on) async {
+    setState(() => _amend = on);
+    if (!on || _message.text.trim().isNotEmpty) return;
+    try {
+      final head = await widget.git.headMessage();
+      if (mounted) _message.text = head.trim();
+    } on GitError {
+      // No HEAD yet (an empty repo): nothing to prefill, and amend will fail
+      // on its own terms with a message git words better than we would.
+    }
+  }
+
+  Future<void> _generateMessage() async {
+    final ai = widget.ai;
+    if (ai == null || !ai.isConfigured) return;
+
+    setState(() {
+      _generating = true;
+      _error = null;
+    });
+    try {
+      final diff = await widget.git.stagedDiff();
+      if (diff.trim().isEmpty) {
+        setState(() => _error = '没有已暂存的改动可供生成');
+        return;
+      }
+      final token = await ai.readToken() ?? '';
+      final text = await Git.aiChat(
+        url: aiEndpoint(ai.baseUrl),
+        token: token,
+        model: ai.model,
+        system: ai.prompt,
+        user: diff,
+      );
+      if (mounted) _message.text = text.trim();
+    } on GitError catch (e) {
+      if (mounted) setState(() => _error = e.message);
+    } finally {
+      if (mounted) setState(() => _generating = false);
+    }
+  }
+
+  Future<void> _pickPastMessage(Offset at) async {
+    try {
+      final messages = await widget.git.recentMessages();
+      if (!mounted || messages.isEmpty) return;
+      await showRepoMenu(
+        context: context,
+        position: at,
+        items: [
+          for (final m in messages.take(20))
+            MenuAction(
+              // One line in the menu; the full text still lands in the box.
+              m.split('\n').first,
+              () => _message.text = m.trimRight(),
+            ),
+        ],
+      );
+    } on GitError catch (e) {
+      if (mounted) setState(() => _error = e.message);
+    }
   }
 
   List<FileStatus> get _staged =>
@@ -64,11 +141,17 @@ class _CommitSheetState extends State<CommitSheet> {
       setState(() => _error = '提交说明不能为空');
       return;
     }
-    if (_staged.isEmpty) {
+    // Amending is allowed with nothing staged — it rewords HEAD.
+    if (_staged.isEmpty && !_amend) {
       setState(() => _error = '没有已暂存的改动');
       return;
     }
-    await _run(() => widget.git.commit(text));
+    await _run(() => widget.git.commit(
+          text,
+          amend: _amend,
+          signoff: _signoff,
+          author: _author.text.trim().isEmpty ? null : _author.text.trim(),
+        ));
     if (mounted && _error == null) {
       _message.clear();
       widget.onClose();
@@ -165,12 +248,72 @@ class _CommitSheetState extends State<CommitSheet> {
                           ),
                         ),
                       ),
+                      const SizedBox(height: 6),
+                      Row(
+                        children: [
+                          _Check(
+                            label: '修正提交',
+                            tooltip: '修补上一个提交而不新建提交',
+                            value: _amend,
+                            onChanged: _busy ? null : _toggleAmend,
+                          ),
+                          const SizedBox(width: 12),
+                          _Check(
+                            label: 'Sign-off',
+                            tooltip: '在提交说明末尾追加 Signed-off-by',
+                            value: _signoff,
+                            onChanged: _busy
+                                ? null
+                                : (v) => setState(() => _signoff = v),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: SizedBox(
+                              height: 22,
+                              child: TextField(
+                                controller: _author,
+                                style: ui.copyWith(color: p.text, fontSize: 11),
+                                cursorColor: p.accent,
+                                decoration: InputDecoration(
+                                  isDense: true,
+                                  contentPadding:
+                                      const EdgeInsets.symmetric(horizontal: 6),
+                                  hintText: '作者（留空用 git 配置）',
+                                  hintStyle:
+                                      ui.copyWith(color: p.textDim, fontSize: 11),
+                                  border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(3),
+                                    borderSide: BorderSide(color: p.border),
+                                  ),
+                                  enabledBorder: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(3),
+                                    borderSide: BorderSide(color: p.border),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
                       const SizedBox(height: 8),
                       Row(
-                        mainAxisAlignment: MainAxisAlignment.end,
                         children: [
                           _Button(
-                            label: _busy ? '处理中…' : '提交',
+                            label: '历史说明',
+                            onTapAt: _busy ? null : _pickPastMessage,
+                          ),
+                          const SizedBox(width: 6),
+                          _Button(
+                            label: _generating ? '生成中…' : 'AI 生成',
+                            onTap: (widget.ai?.isConfigured ?? false) &&
+                                    !_generating &&
+                                    !_busy
+                                ? _generateMessage
+                                : null,
+                          ),
+                          const Spacer(),
+                          _Button(
+                            label: _busy ? '处理中…' : (_amend ? '修正提交' : '提交'),
                             primary: true,
                             onTap: _busy ? null : _commit,
                           ),
@@ -292,11 +435,75 @@ class _FileRowState extends State<_FileRow> {
   }
 }
 
+/// A labelled checkbox drawn in the app's own palette rather than Material's,
+/// so it matches the rest of the sheet.
+class _Check extends StatelessWidget {
+  const _Check({
+    required this.label,
+    required this.tooltip,
+    required this.value,
+    required this.onChanged,
+  });
+
+  final String label;
+  final String tooltip;
+  final bool value;
+  final void Function(bool)? onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = Theming.of(context);
+    final enabled = onChanged != null;
+    return Tooltip(
+      message: tooltip,
+      child: MouseRegion(
+        cursor: enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
+        child: GestureDetector(
+          onTap: enabled ? () => onChanged!(!value) : null,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 13,
+                height: 13,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: value ? p.accent : p.bg,
+                  border: Border.all(color: value ? p.accent : p.border),
+                  borderRadius: BorderRadius.circular(3),
+                ),
+                child: value
+                    ? const Text('✓',
+                        style: TextStyle(
+                            fontSize: 9,
+                            color: Color(0xFFFFFFFF),
+                            height: 1))
+                    : null,
+              ),
+              const SizedBox(width: 5),
+              Text(label,
+                  style: ui.copyWith(
+                      color: enabled ? p.text : p.textDim, fontSize: 11)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _Button extends StatefulWidget {
-  const _Button(
-      {required this.label, required this.onTap, this.primary = false});
+  const _Button({
+    required this.label,
+    this.onTap,
+    this.onTapAt,
+    this.primary = false,
+  });
   final String label;
   final VoidCallback? onTap;
+
+  /// For buttons that open a menu at the pointer.
+  final void Function(Offset position)? onTapAt;
   final bool primary;
 
   @override
@@ -309,7 +516,7 @@ class _ButtonState extends State<_Button> {
   @override
   Widget build(BuildContext context) {
     final p = Theming.of(context);
-    final enabled = widget.onTap != null;
+    final enabled = widget.onTap != null || widget.onTapAt != null;
     // Same rule as the merge window: a disabled primary loses the accent
     // instead of fading it, so "cannot press this" is unmistakable.
     final bg = widget.primary && enabled
@@ -322,6 +529,9 @@ class _ButtonState extends State<_Button> {
       onExit: (_) => setState(() => _hover = false),
       child: GestureDetector(
         onTap: widget.onTap,
+        onTapUp: widget.onTapAt == null
+            ? null
+            : (d) => widget.onTapAt!(d.globalPosition),
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
           decoration: BoxDecoration(

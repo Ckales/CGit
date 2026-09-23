@@ -1,6 +1,8 @@
 // Twice on purpose: unprefixed so the generated types can be named bare, and
 // prefixed so calls like `rust.commit(...)` do not collide with this class's
 // own methods of the same name.
+import 'dart:typed_data';
+
 import 'src/rust/api/git.dart';
 import 'src/rust/api/git.dart' as rust;
 import 'src/rust/api/watch.dart' as watch_api;
@@ -144,6 +146,215 @@ class Git {
   /// the blame result.
   Future<List<BlameLine>> blame(String file) =>
       _guard(() => rust.getBlame(path: repo, file: file));
+
+  /// Throw away a file's uncommitted changes. Nothing in git gets these back,
+  /// which is why every caller confirms first.
+  Future<void> discard(String file) =>
+      _guard(() => rust.discardChanges(path: repo, file: file));
+
+  /// Check out any ref — a branch, a remote branch, a tag or a sha. Core
+  /// shells out so git can DWIM `origin/foo` into a local tracking branch and
+  /// detach HEAD cleanly for a tag.
+  Future<String> checkoutRef(String refName) =>
+      _guard(() => rust.checkoutRef(path: repo, refName: refName));
+
+  /// One file's history, newest first.
+  Future<List<CommitInfo>> fileHistory(String file, {int limit = 100}) =>
+      _guard(() => rust.getFileHistory(
+            path: repo,
+            file: file,
+            limit: BigInt.from(limit),
+          ));
+
+  Future<String> pushTag(String name) =>
+      _guard(() => rust.pushTag(path: repo, name: name));
+
+  /// Clone into `dir`, streaming git's progress lines. The stream completes
+  /// when the clone does; the created worktree path arrives as the last value.
+  static Stream<String> clone(String url, String dir) =>
+      watch_api.cloneRepo(url: url, dir: dir);
+
+  /// An editor's app icon as PNG bytes, or null when it cannot be read —
+  /// apps that pack icons into Assets.car (Xcode) have none to extract, and a
+  /// missing icon is a text-only button, not an error.
+  static Future<Uint8List?> editorIcon(String name) async {
+    try {
+      return await rust.editorIcon(name: name);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /* ---------- interactive rebase ---------- */
+
+  /// Commits in `base..HEAD`, oldest first — the order an interactive rebase
+  /// edits them in.
+  Future<List<TodoCommit>> rebaseTodo(String base) =>
+      _guard(() => rust.getRebaseTodo(path: repo, base: base));
+
+  /// Run `git rebase -i` non-interactively: core feeds the todo through
+  /// GIT_SEQUENCE_EDITOR and pops `messages` for each reword, so the two must
+  /// be in the same order.
+  Future<String> rebaseInteractive({
+    required String base,
+    required String todo,
+    required List<String> messages,
+    required bool autostash,
+  }) =>
+      _guard(() => rust.rebaseInteractive(
+            path: repo,
+            base: base,
+            todo: todo,
+            messages: messages,
+            autostash: autostash,
+          ));
+
+  /* ---------- identity and credentials ---------- */
+
+  Future<Identity> identity() => _guard(() => rust.getIdentity(path: repo));
+
+  Future<void> setIdentity(String name, String email, {bool global = false}) =>
+      _guard(() => rust.setIdentity(
+            path: repo,
+            name: name,
+            email: email,
+            global: global,
+          ));
+
+  /// What the credential helper holds for this remote. Reports *whether* a
+  /// credential exists, never the credential itself — the returned struct has
+  /// no token field, by design.
+  Future<GitCredentialInfo> credential() =>
+      _guard(() => rust.getGitCredential(path: repo));
+
+  /// Hand a token to `git credential approve`.
+  ///
+  /// Core passes it on stdin and nowhere else: not in argv, not in the return
+  /// value, not in an error string. This wrapper keeps that intact by taking
+  /// the token straight from the field and forgetting it — it is never stored
+  /// in preferences, never logged, and never held in state.
+  Future<GitCredentialInfo> saveCredential(String username, String token) =>
+      _guard(() => rust.saveGitCredential(
+            path: repo,
+            username: username,
+            token: token,
+          ));
+
+  /// Ask the remote whether the stored credential actually grants push access.
+  Future<String> testCredential() =>
+      _guard(() => rust.testGitCredential(path: repo));
+
+  /* ---------- commit messages ---------- */
+
+  /// The staged diff, which is what an AI message should describe — an empty
+  /// `file` means everything staged.
+  Future<String> stagedDiff({String file = ''}) =>
+      _guard(() => rust.getStagedDiff(path: repo, file: file));
+
+  /// Recent commit messages, for the "reuse a past message" picker.
+  Future<List<String>> recentMessages({int limit = 30}) => _guard(
+      () => rust.getCommitMessages(path: repo, limit: BigInt.from(limit)));
+
+  /// HEAD's message, which is what `--amend` starts from.
+  Future<String> headMessage() => _guard(() => rust.getHeadMessage(path: repo));
+
+  /// One non-streaming round against an OpenAI-compatible endpoint. Core makes
+  /// the request with curl rather than from the UI process, so relay services
+  /// that mishandle CORS preflights and plain-http endpoints both still work.
+  static Future<String> aiChat({
+    required String url,
+    required String token,
+    required String model,
+    required String system,
+    required String user,
+  }) =>
+      _guard(() => rust.aiChat(
+            url: url,
+            token: token,
+            model: model,
+            system: system,
+            user: user,
+          ));
+
+  /* ---------- search and remotes ---------- */
+
+  /// Filter history by message and/or author. An empty query and author means
+  /// "everything", which is how the UI returns to the unfiltered graph without
+  /// a separate call.
+  Future<List<CommitInfo>> searchCommits({
+    String query = '',
+    String author = '',
+    int limit = 200,
+  }) =>
+      _guard(() => rust.searchCommits(
+            path: repo,
+            query: query,
+            author: author,
+            limit: BigInt.from(limit),
+          ));
+
+  Future<List<String>> remoteBranches() =>
+      _guard(() => rust.getRemoteBranches(path: repo));
+
+  Future<String> addRemote(String name, String url) =>
+      _guard(() => rust.addRemote(path: repo, name: name, url: url));
+
+  Future<String> removeRemote(String name) =>
+      _guard(() => rust.removeRemote(path: repo, name: name));
+
+  Future<String> deleteRemoteBranch(String remote, String branch) =>
+      _guard(() => rust.deleteRemoteBranch(
+            path: repo,
+            remote: remote,
+            branch: branch,
+          ));
+
+  /* ---------- patches ---------- */
+
+  /// Apply a patch to the *worktree* — core's `apply_patch`, not `apply_hunk`.
+  /// git applies all or nothing, so a patch that does not fit leaves the tree
+  /// untouched rather than half-applied.
+  Future<void> applyPatchFile(String patch) =>
+      _guard(() => rust.applyPatch(path: repo, patch: patch));
+
+  Future<String> readPatchFile(String file) =>
+      _guard(() => rust.readPatchFile(file: file));
+
+  Future<String> readClipboard() => _guard(() => rust.readClipboard());
+
+  /// Every local change as one patch.
+  Future<String> createPatch() => _guard(() => rust.createPatch(path: repo));
+
+  /* ---------- editors ---------- */
+
+  /// Which editors are actually installed. Core matches known .app names by
+  /// prefix, so JetBrains Toolbox installs ("IntelliJ IDEA Ultimate.app") are
+  /// recognised; anything off the list is not.
+  static Future<List<String>> editors() => _guard(() => rust.listEditors());
+
+  /// An empty `editor` hands the file to the system default.
+  Future<void> openInEditor(String file, {String editor = ''}) =>
+      _guard(() => rust.openInEditor(path: repo, file: file, editor: editor));
+
+  /// Open the project and a file in one `open` call — two calls race on a cold
+  /// start and the file can land in a different window.
+  ///
+  /// `project` is what the editor should treat as the project root, which in a
+  /// multi-repo workspace is the workspace folder rather than [repo].
+  Future<void> openProjectWithFile(
+    String file, {
+    String? project,
+    String editor = '',
+  }) =>
+      _guard(() => rust.openProjectWithFile(
+            project: project ?? repo,
+            path: repo,
+            file: file,
+            editor: editor,
+          ));
+
+  Future<void> openProject({String editor = ''}) =>
+      _guard(() => rust.openPath(path: repo, editor: editor));
 
   /* ---------- history ---------- */
 

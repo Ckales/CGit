@@ -2,6 +2,7 @@ import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'ai_settings.dart';
 import 'blame_view.dart';
 import 'branch_menu.dart';
 import 'commit_menu.dart';
@@ -15,6 +16,9 @@ import 'merge_view.dart';
 import 'network_ops.dart';
 import 'prefs.dart';
 import 'prompt.dart';
+import 'rebase_plan.dart';
+import 'rebase_sheet.dart';
+import 'settings_sheet.dart';
 import 'theme.dart';
 
 Future<void> main(List<String> args) async {
@@ -43,8 +47,7 @@ class CGitApp extends StatefulWidget {
 }
 
 class _CGitAppState extends State<CGitApp> {
-  late Palette _palette =
-      widget.prefs.isDark ? Palette.dark : Palette.light;
+  late Palette _palette = widget.prefs.isDark ? Palette.dark : Palette.light;
 
   @override
   Widget build(BuildContext context) {
@@ -141,6 +144,7 @@ class _RepoScreenState extends State<RepoScreen> {
   late DiffMode _mode =
       widget.prefs.isSplitDiff ? DiffMode.split : DiffMode.unified;
   bool _commitOpen = false;
+  bool _settingsOpen = false;
 
   /// Files still carrying conflict markers, and which multi-step operation the
   /// repo is in the middle of ("none" when it is not). They travel together:
@@ -153,7 +157,20 @@ class _RepoScreenState extends State<RepoScreen> {
   /// Where HEAD stands against its upstream. Drives the ahead/behind counters
   /// and what the push button says it will do.
   Tracking? _tracking;
+
+  /// Editors found on this machine, loaded once — the list only changes when
+  /// the user installs something, which is not worth polling for.
+  List<String> _editors = const [];
+  AiSettings? _ai;
   List<StashEntry> _stashes = const [];
+  List<String> _remoteBranches = const [];
+
+  /// Search is a separate view over history rather than a filter on the graph:
+  /// searchCommits returns a flat list with no parent links, so there are no
+  /// lanes to draw. Empty filters mean the graph is showing.
+  final _searchText = TextEditingController();
+  final _searchAuthor = TextEditingController();
+  List<CommitInfo>? _searchResults;
 
   /// One network call at a time: they all touch the same refs, and a fetch
   /// racing a push produces failures that are nobody's fault.
@@ -162,6 +179,10 @@ class _RepoScreenState extends State<RepoScreen> {
   /// The file open in the merge window, and its worktree text.
   String? _mergeFile;
   String _mergeContent = '';
+
+  /// The in-progress interactive rebase plan, and the base it rewrites onto.
+  RebasePlan? _rebasePlan;
+  String _rebaseBase = '';
 
   late double _sidebarWidth = widget.prefs.sidebarWidth ?? 220;
   late double _historyHeight = widget.prefs.historyHeight ?? 260;
@@ -172,12 +193,43 @@ class _RepoScreenState extends State<RepoScreen> {
   void initState() {
     super.initState();
     _openRepo(widget.startPath);
+    // Finding no editors is not an error worth reporting: the empty list just
+    // means every "open in editor" falls back to the system default.
+    AiSettings.load().then((ai) {
+      if (mounted) setState(() => _ai = ai);
+    });
+    Git.editors().then(
+      (list) {
+        if (mounted) setState(() => _editors = list);
+      },
+      onError: (_) {},
+    );
   }
 
   @override
   void dispose() {
     _historyScroll.dispose();
+    _searchText.dispose();
+    _searchAuthor.dispose();
     super.dispose();
+  }
+
+  /// Re-run the search, or drop back to the graph when both fields are empty.
+  Future<void> _runSearch() async {
+    final git = _git;
+    if (git == null) return;
+    final query = _searchText.text.trim();
+    final author = _searchAuthor.text.trim();
+    if (query.isEmpty && author.isEmpty) {
+      setState(() => _searchResults = null);
+      return;
+    }
+    try {
+      final found = await git.searchCommits(query: query, author: author);
+      if (mounted) setState(() => _searchResults = found);
+    } on GitError catch (e) {
+      if (mounted) setState(() => _status = e.message);
+    }
   }
 
   Future<void> _openRepo(String path) async {
@@ -215,6 +267,7 @@ class _RepoScreenState extends State<RepoScreen> {
         git.repoState(),
         git.tracking(),
         git.stashList(),
+        git.remoteBranches(),
       ]);
       if (!mounted) return;
       setState(() {
@@ -228,6 +281,7 @@ class _RepoScreenState extends State<RepoScreen> {
         _op = results[7] as String;
         _tracking = results[8] as Tracking;
         _stashes = results[9] as List<StashEntry>;
+        _remoteBranches = results[10] as List<String>;
         _status = '就绪';
       });
       await _reloadDiff();
@@ -264,8 +318,8 @@ class _RepoScreenState extends State<RepoScreen> {
 
   List<MenuAction> _commitMenu(GraphCommit c) => commitMenu(
         run: (cmd) => switch (cmd) {
-          CommitCommand.resetMixed =>
-            _stashAction('重置到 ${_short(c)}', () => _git!.resetTo(c.id, 'mixed')),
+          CommitCommand.resetMixed => _stashAction(
+              '重置到 ${_short(c)}', () => _git!.resetTo(c.id, 'mixed')),
           CommitCommand.resetSoft =>
             _stashAction('重置到 ${_short(c)}', () => _git!.resetTo(c.id, 'soft')),
           CommitCommand.resetHard => _stashAction(
@@ -279,7 +333,7 @@ class _RepoScreenState extends State<RepoScreen> {
             _stashAction('回退 ${_short(c)}', () => _git!.revert(c.id)),
           CommitCommand.cherryPick =>
             _stashAction('拣选 ${_short(c)}', () => _git!.cherryPick(c.id)),
-          CommitCommand.rebaseFrom => _notYet('交互式变基'),
+          CommitCommand.rebaseFrom => _openRebase(c.id),
           CommitCommand.tag => _newTag(oid: c.id),
           CommitCommand.patchToClipboard => _patchToClipboard(c),
           CommitCommand.patchToFile => _patchToFile(c),
@@ -288,10 +342,45 @@ class _RepoScreenState extends State<RepoScreen> {
 
   String _short(GraphCommit c) => c.id.substring(0, 7);
 
-  /// Entries whose backing UI is not built yet say so instead of doing nothing —
-  /// a menu item that silently no-ops reads as a broken app.
-  void _notYet(String what) {
-    setState(() => _status = '$what 还没做');
+  /// `base..HEAD` is what gets rewritten, so the commit the user right-clicked
+  /// is the base — it stays put and everything after it is replayed.
+  Future<void> _openRebase(String base) async {
+    final git = _git;
+    if (git == null) return;
+    try {
+      final todo = await git.rebaseTodo(base);
+      if (!mounted) return;
+      if (todo.isEmpty) {
+        setState(() => _status = '该提交之后没有可变基的提交');
+        return;
+      }
+      setState(() {
+        _rebaseBase = base;
+        _rebasePlan = RebasePlan.fromTodo(todo);
+      });
+    } on GitError catch (e) {
+      if (mounted) setState(() => _status = e.message);
+    }
+  }
+
+  Future<void> _startRebase({
+    required String todo,
+    required List<String> messages,
+    required bool autostash,
+  }) async {
+    final git = _git;
+    final base = _rebaseBase;
+    if (git == null) return;
+    setState(() => _rebasePlan = null);
+    await _stashAction(
+      '变基',
+      () => git.rebaseInteractive(
+        base: base,
+        todo: todo,
+        messages: messages,
+        autostash: autostash,
+      ),
+    );
   }
 
   Future<void> _patchToClipboard(GraphCommit c) async {
@@ -344,8 +433,8 @@ class _RepoScreenState extends State<RepoScreen> {
         branch: b,
         currentBranch: _branch,
         run: (cmd) => switch (cmd) {
-          BranchCommand.checkout => _branchAction(
-              '已切换到 ${b.name}', () => _git!.checkout(b.name)),
+          BranchCommand.checkout =>
+            _branchAction('已切换到 ${b.name}', () => _git!.checkout(b.name)),
           BranchCommand.newFrom => _newBranch(base: b.name),
           BranchCommand.mergeInto =>
             _stashAction('合并 ${b.name}', () => _git!.mergeBranch(b.name)),
@@ -353,6 +442,9 @@ class _RepoScreenState extends State<RepoScreen> {
             _stashAction('更新 ${b.name}', () => _git!.updateBranch(b.name)),
           BranchCommand.push =>
             _network('推送 ${b.name}', () => _git!.pushBranch(b.name)),
+          BranchCommand.applyPatchFromFile => _applyPatchFromFile(),
+          BranchCommand.applyPatchFromClipboard =>
+            _applyPatchFrom(() => _git!.readClipboard(), '剪贴板'),
           BranchCommand.rename => _renameBranch(b.name),
           BranchCommand.delete => _branchAction(
               '已删除分支 ${b.name}',
@@ -361,6 +453,34 @@ class _RepoScreenState extends State<RepoScreen> {
             ),
         },
       );
+
+  Future<void> _addRemote() async {
+    final name = await promptText(context,
+        title: '添加远端', hint: '名称，例如 origin', confirmLabel: '下一步');
+    if (name == null || name.trim().isEmpty) return;
+    // Two dialogs in sequence: the window can close between them, and reusing
+    // a dead context throws rather than quietly doing nothing.
+    if (!mounted) return;
+    final url = await promptText(context,
+        title: "远端 '${name.trim()}' 的地址", hint: 'https://… 或 git@…');
+    if (url == null || url.trim().isEmpty) return;
+    await _stashAction(
+        '添加远端 ${name.trim()}', () => _git!.addRemote(name.trim(), url.trim()));
+  }
+
+  /// `origin/feature` splits into the remote and the branch: core needs them
+  /// apart, and a branch name may itself contain slashes.
+  Future<void> _deleteRemoteBranch(String full) async {
+    final cut = full.indexOf('/');
+    if (cut < 0) return;
+    final remote = full.substring(0, cut);
+    final branch = full.substring(cut + 1);
+    await _stashAction(
+      '删除 $full',
+      () => _git!.deleteRemoteBranch(remote, branch),
+      confirm: '删除远端分支「$full」？这会改动远端仓库，其他人也会看到。',
+    );
+  }
 
   Future<void> _newBranch({String? base}) async {
     final name = await promptText(
@@ -405,7 +525,58 @@ class _RepoScreenState extends State<RepoScreen> {
           );
         }),
         MenuAction('逐行归属 (blame)', () => _showBlame(f.path)),
+        MenuAction('在编辑器中打开', () => _openFile(f.path)),
+        MenuAction('丢弃改动', () async {
+          if (!await _confirm(
+            title: '丢弃改动',
+            body: '丢弃「${f.path}」的改动？未提交的内容无法找回。',
+          )) {
+            return;
+          }
+          await _stashAction('丢弃 ${f.path} 的改动', () async {
+            await _git!.discard(f.path);
+            return '';
+          });
+        }, danger: true),
       ];
+
+  Future<void> _openFile(String file) async {
+    try {
+      await _git!.openInEditor(file, editor: _editors.firstOrNull ?? '');
+    } on GitError catch (e) {
+      if (mounted) setState(() => _status = e.message);
+    }
+  }
+
+  /* ---------- patches ---------- */
+
+  Future<void> _applyPatchFrom(
+      Future<String> Function() source, String from) async {
+    final git = _git;
+    if (git == null) return;
+    try {
+      final patch = await source();
+      if (patch.trim().isEmpty) {
+        if (mounted) setState(() => _status = '$from 没有补丁内容');
+        return;
+      }
+      await git.applyPatchFile(patch);
+      await _refresh();
+      if (mounted) setState(() => _status = '已从$from应用补丁');
+    } on GitError catch (e) {
+      if (mounted) setState(() => _status = e.message);
+    }
+  }
+
+  Future<void> _applyPatchFromFile() async {
+    final file = await openFile(
+      acceptedTypeGroups: const [
+        XTypeGroup(label: 'patch', extensions: ['patch', 'diff']),
+      ],
+    );
+    if (file == null) return;
+    await _applyPatchFrom(() => _git!.readPatchFile(file.path), '文件');
+  }
 
   /// Pick a repository (or a folder of sibling repos) with the native dialog.
   ///
@@ -498,7 +669,9 @@ class _RepoScreenState extends State<RepoScreen> {
     try {
       final out = await action();
       await _refresh();
-      if (mounted) setState(() => _status = out.trim().isEmpty ? '已$label' : out.trim());
+      if (mounted) {
+        setState(() => _status = out.trim().isEmpty ? '已$label' : out.trim());
+      }
     } on GitError catch (e) {
       if (mounted) setState(() => _status = e.message);
     }
@@ -569,8 +742,7 @@ class _RepoScreenState extends State<RepoScreen> {
       context: context,
       builder: (context) => AlertDialog(
         backgroundColor: p.bgElev,
-        title: Text('远端有新提交',
-            style: ui.copyWith(color: p.text, fontSize: 15)),
+        title: Text('远端有新提交', style: ui.copyWith(color: p.text, fontSize: 15)),
         content: Text(
           '推送被拒绝：远端已经领先。要先用哪种方式更新本地分支？\n\n'
           'git 配置里没有 pull.rebase，所以这次由你决定。',
@@ -744,13 +916,54 @@ class _RepoScreenState extends State<RepoScreen> {
     final p = Theming.of(context);
 
     return CallbackShortcuts(
+      // Mirrors the Tauri shortcuts.
+      //
+      // That version suppresses most of these while the user is typing, because
+      // in a browser ⌘S / ⌘P / ⌘O carry the *browser's* meaning and its handler
+      // is global. Neither is true here: a Flutter TextField gives these keys no
+      // behaviour of its own, so there is nothing to yield to and no reason to
+      // track focus. ⌘↵ inside the commit box commits, which is what it should
+      // do there anyway.
       bindings: {
+        const SingleActivator(LogicalKeyboardKey.keyO, meta: true): _pickRepo,
+        const SingleActivator(LogicalKeyboardKey.comma, meta: true): () {
+          if (_git != null) setState(() => _settingsOpen = true);
+        },
         const SingleActivator(LogicalKeyboardKey.enter, meta: true): () {
           if (_git != null) setState(() => _commitOpen = true);
         },
-        const SingleActivator(LogicalKeyboardKey.keyR, meta: true): _refresh,
+        const SingleActivator(LogicalKeyboardKey.keyR, meta: true): () {
+          if (_git != null) _refresh();
+        },
+        const SingleActivator(LogicalKeyboardKey.keyT, meta: true): () {
+          if (_git != null && !_netBusy) _fetch();
+        },
+        const SingleActivator(LogicalKeyboardKey.keyL, meta: true): () {
+          if (_git != null && !_netBusy) _pull();
+        },
+        const SingleActivator(LogicalKeyboardKey.keyP, meta: true): () {
+          if (_git != null && !_netBusy) _push();
+        },
+        const SingleActivator(LogicalKeyboardKey.keyN, meta: true): () {
+          if (_git != null) _newBranch();
+        },
+        const SingleActivator(LogicalKeyboardKey.keyS, meta: true): () {
+          if (_git != null) {
+            _stashAction('储藏改动', () => _git!.stashSave());
+          }
+        },
         const SingleActivator(LogicalKeyboardKey.escape): () {
-          if (_commitOpen) setState(() => _commitOpen = false);
+          // Innermost first: the sheet the user is looking at closes, not
+          // whatever happens to be listed first.
+          if (_settingsOpen) {
+            setState(() => _settingsOpen = false);
+          } else if (_rebasePlan != null) {
+            setState(() => _rebasePlan = null);
+          } else if (_mergeFile != null) {
+            setState(() => _mergeFile = null);
+          } else if (_commitOpen) {
+            setState(() => _commitOpen = false);
+          }
         },
       },
       child: Focus(
@@ -790,6 +1003,19 @@ class _RepoScreenState extends State<RepoScreen> {
                     _statusBar(p),
                   ],
                 ),
+                if (_rebasePlan != null)
+                  RebaseSheet(
+                    plan: _rebasePlan!,
+                    dirtyWorktree: _changes.isNotEmpty,
+                    onClose: () => setState(() => _rebasePlan = null),
+                    onStart: _startRebase,
+                  ),
+                if (_settingsOpen && _git != null)
+                  SettingsSheet(
+                    git: _git!,
+                    ai: _ai,
+                    onClose: () => setState(() => _settingsOpen = false),
+                  ),
                 if (_mergeFile != null)
                   MergeWindow(
                     file: _mergeFile!,
@@ -806,6 +1032,7 @@ class _RepoScreenState extends State<RepoScreen> {
                     onClose: () => setState(() => _commitOpen = false),
                     onChanged: _refresh,
                     onPickFile: _showFile,
+                    ai: _ai,
                   ),
               ],
             ),
@@ -867,6 +1094,43 @@ class _RepoScreenState extends State<RepoScreen> {
               );
             },
           ),
+          _ToolButton(
+            label: '打开项目',
+            enabled: _git != null,
+            tooltip: _editors.isEmpty ? '用系统默认程序打开' : '用 ${_editors.first} 打开',
+            onTap: () async {
+              try {
+                await _git!.openProject(editor: _editors.firstOrNull ?? '');
+              } on GitError catch (e) {
+                if (mounted) setState(() => _status = e.message);
+              }
+            },
+            // Right-click picks a different editor, when more than one is here.
+            onSecondaryTapAt: _editors.length < 2
+                ? null
+                : (pos) => showRepoMenu(
+                      context: context,
+                      position: pos,
+                      items: [
+                        for (final e in _editors)
+                          MenuAction(e, () async {
+                            try {
+                              await _git!.openProject(editor: e);
+                            } on GitError catch (err) {
+                              if (mounted) {
+                                setState(() => _status = err.message);
+                              }
+                            }
+                          }),
+                      ],
+                    ),
+          ),
+          _ToolButton(
+            label: '设置',
+            enabled: _git != null,
+            tooltip: '⌘,',
+            onTap: () => setState(() => _settingsOpen = true),
+          ),
           _ToolButton(label: '刷新', enabled: _git != null, onTap: _refresh),
           _ToolButton(
             label: _mode == DiffMode.split ? '并排' : '统一',
@@ -914,8 +1178,48 @@ class _RepoScreenState extends State<RepoScreen> {
                         ),
               ),
             ),
-          _SectionHead(label: '远端', palette: p),
-          for (final r in _remotes) _SidebarRow(label: r.name, palette: p),
+          _SectionHead(
+            label: '远端',
+            palette: p,
+            action:
+                _git == null ? null : _SectionAction('＋', '添加远端', _addRemote),
+          ),
+          for (final r in _remotes)
+            ContextMenuRegion(
+              items: () => [
+                MenuAction(
+                  '移除远端',
+                  () => _stashAction(
+                    '移除远端 ${r.name}',
+                    () => _git!.removeRemote(r.name),
+                    confirm: '移除远端「${r.name}」（${r.url}）？'
+                        '本地分支和提交不受影响。',
+                  ),
+                  danger: true,
+                ),
+              ],
+              child: _SidebarRow(
+                label: r.name,
+                palette: p,
+                // The URL is what tells two remotes apart; the name alone does
+                // not say whether origin points where you think it does.
+                tooltip: r.url,
+              ),
+            ),
+          if (_remoteBranches.isNotEmpty) ...[
+            _SectionHead(label: '远端分支', palette: p),
+            for (final rb in _remoteBranches)
+              ContextMenuRegion(
+                items: () => [
+                  MenuAction(
+                    '删除远端分支',
+                    () => _deleteRemoteBranch(rb),
+                    danger: true,
+                  ),
+                ],
+                child: _SidebarRow(label: rb, palette: p),
+              ),
+          ],
           _SectionHead(
             label: '标签',
             palette: p,
@@ -941,9 +1245,11 @@ class _RepoScreenState extends State<RepoScreen> {
           _SectionHead(
             label: '储藏',
             palette: p,
-            action: _git == null ? null : _SectionAction('⤓', '储藏当前改动', () {
-              _stashAction('储藏改动', () => _git!.stashSave());
-            }),
+            action: _git == null
+                ? null
+                : _SectionAction('⤓', '储藏当前改动', () {
+                    _stashAction('储藏改动', () => _git!.stashSave());
+                  }),
           ),
           for (final st in _stashes)
             ContextMenuRegion(
@@ -992,15 +1298,17 @@ class _RepoScreenState extends State<RepoScreen> {
           height: _historyHeight,
           child: Column(
             children: [
-              _PaneHead(title: '历史', palette: p),
+              _historyHead(p),
               Expanded(
-                child: HistoryView(
-                  layout: _graph,
-                  selected: _selectedCommit?.id,
-                  onSelect: _selectCommit,
-                  controller: _historyScroll,
-                  menuFor: _commitMenu,
-                ),
+                child: _searchResults != null
+                    ? _searchList(p)
+                    : HistoryView(
+                        layout: _graph,
+                        selected: _selectedCommit?.id,
+                        onSelect: _selectCommit,
+                        controller: _historyScroll,
+                        menuFor: _commitMenu,
+                      ),
               ),
             ],
           ),
@@ -1101,6 +1409,90 @@ class _RepoScreenState extends State<RepoScreen> {
       ],
     );
   }
+
+  Widget _historyHead(Palette p) => Container(
+        height: 26,
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        decoration: BoxDecoration(
+          color: p.bgAlt,
+          border: Border(bottom: BorderSide(color: p.border)),
+        ),
+        child: Row(
+          children: [
+            Text('历史', style: ui.copyWith(color: p.textDim, fontSize: 11)),
+            const SizedBox(width: 10),
+            _searchField(p, _searchText, '搜索提交说明', 200),
+            const SizedBox(width: 6),
+            _searchField(p, _searchAuthor, '作者', 120),
+            if (_searchResults != null) ...[
+              const SizedBox(width: 8),
+              Text('${_searchResults!.length} 条结果',
+                  style: ui.copyWith(color: p.textDim, fontSize: 11)),
+            ],
+          ],
+        ),
+      );
+
+  Widget _searchField(
+    Palette p,
+    TextEditingController controller,
+    String hint,
+    double width,
+  ) =>
+      SizedBox(
+        width: width,
+        height: 20,
+        child: TextField(
+          controller: controller,
+          style: ui.copyWith(color: p.text, fontSize: 11),
+          cursorColor: p.accent,
+          // Searching runs git log, so it waits for Enter rather than firing on
+          // every keystroke the way a client-side filter could.
+          onSubmitted: (_) => _runSearch(),
+          decoration: InputDecoration(
+            isDense: true,
+            contentPadding: const EdgeInsets.symmetric(horizontal: 6),
+            hintText: hint,
+            hintStyle: ui.copyWith(color: p.textDim, fontSize: 11),
+            filled: true,
+            fillColor: p.bg,
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(3),
+              borderSide: BorderSide(color: p.border),
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(3),
+              borderSide: BorderSide(color: p.border),
+            ),
+          ),
+        ),
+      );
+
+  /// Search results are a flat list: searchCommits has no parent links, so
+  /// there are no lanes to draw and pretending otherwise would draw a wrong
+  /// graph rather than no graph.
+  Widget _searchList(Palette p) => ListView.builder(
+        itemExtent: 22,
+        itemCount: _searchResults!.length,
+        itemBuilder: (context, i) {
+          final c = _searchResults![i];
+          return _SidebarRow(
+            label: c.summary,
+            palette: p,
+            leading: c.id.substring(0, 7),
+            leadingColor: p.accent,
+            active: _selectedCommit?.id == c.id,
+            onTap: () => _selectCommit(GraphCommit(
+              id: c.id,
+              summary: c.summary,
+              author: c.author,
+              time: c.time,
+              parents: const [],
+              refs: const [],
+            )),
+          );
+        },
+      );
 
   /// How far HEAD is from its upstream. Nothing is shown when the branch is in
   /// step — a pair of zeroes is noise, and their absence is the same message.
@@ -1391,6 +1783,7 @@ class _SidebarRow extends StatefulWidget {
     this.active = false,
     this.onTap,
     this.onTapAt,
+    this.tooltip,
   });
 
   final String label;
@@ -1404,6 +1797,8 @@ class _SidebarRow extends StatefulWidget {
   /// open a menu, which has to appear where the pointer is.
   final void Function(Offset position)? onTapAt;
 
+  final String? tooltip;
+
   @override
   State<_SidebarRow> createState() => _SidebarRowState();
 }
@@ -1414,7 +1809,7 @@ class _SidebarRowState extends State<_SidebarRow> {
   @override
   Widget build(BuildContext context) {
     final p = widget.palette;
-    return MouseRegion(
+    final row = MouseRegion(
       cursor: widget.onTap == null
           ? SystemMouseCursors.basic
           : SystemMouseCursors.click,
@@ -1461,5 +1856,9 @@ class _SidebarRowState extends State<_SidebarRow> {
         ),
       ),
     );
+
+    return widget.tooltip == null
+        ? row
+        : Tooltip(message: widget.tooltip!, child: row);
   }
 }

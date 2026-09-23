@@ -76,6 +76,19 @@ void main() {
     expect(labels, contains('检出'), reason: 'checking one out is still valid');
   });
 
+  test('patch entries appear only on the checked-out branch', () {
+    // A patch is applied to the working tree, which belongs to whatever is
+    // checked out. Offering it on another branch would either lie about where
+    // the patch lands or silently check that branch out first.
+    final onCurrent =
+        _entries(_branch('main', current: true), 'main').map((e) => e.label);
+    final onOther = _entries(_branch('feature'), 'main').map((e) => e.label);
+
+    expect(onCurrent, contains('应用补丁（从文件）…'));
+    expect(onCurrent, contains('应用补丁（从剪贴板）'));
+    expect(onOther.where((l) => l.contains('应用补丁')), isEmpty);
+  });
+
   test('each entry dispatches its own command', () {
     final calls = <BranchCommand>[];
     final items = branchMenu(
@@ -88,6 +101,7 @@ void main() {
       item.onTap();
     }
 
+    // feature is not checked out, so the patch entries are absent here.
     expect(calls, [
       BranchCommand.checkout,
       BranchCommand.newFrom,

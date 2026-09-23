@@ -13,6 +13,10 @@ import 'package:flutter_test/flutter_test.dart';
 /// `_host` deliberately mirrors main.dart's tree — Theming, then Material, then
 /// the Stack the sheet's Positioned.fill needs — so a regression in any of those
 /// layers fails here rather than only on screen.
+/// The message box, told apart from the author field by its hint.
+Finder get _messageBox =>
+    find.ancestor(of: find.text('提交说明'), matching: find.byType(TextField));
+
 Widget _host(Widget child) => MaterialApp(
       home: Theming(
         palette: Palette.dark,
@@ -36,11 +40,54 @@ CommitSheet _sheet({List<FileStatus>? changes}) => CommitSheet(
     );
 
 void main() {
+  group('commit options', () {
+    testWidgets('amending is allowed with nothing staged — it rewords HEAD',
+        (tester) async {
+      await tester.pumpWidget(_host(_sheet(
+        changes: const [FileStatus(path: 'a.dart', status: 'M', staged: false)],
+      )));
+
+      await tester.enterText(_messageBox, '改个说明');
+      await tester.tap(find.text('提交').last);
+      await tester.pump();
+      expect(find.text('没有已暂存的改动'), findsOneWidget);
+
+      // With amend on, the same state is fine: there is a commit to reword.
+      await tester.tap(find.text('修正提交'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('修正提交').last);
+      await tester.pump();
+      expect(find.text('没有已暂存的改动'), findsNothing);
+    });
+
+    testWidgets('the commit button says what it will do', (tester) async {
+      await tester.pumpWidget(_host(_sheet()));
+      expect(find.text('提交').last, findsOneWidget);
+
+      await tester.tap(find.text('修正提交'));
+      await tester.pumpAndSettle();
+      // Both the checkbox and the button now read 修正提交.
+      expect(find.text('修正提交'), findsNWidgets(2));
+    });
+
+    testWidgets('AI generation stays disabled until the endpoint is set',
+        (tester) async {
+      await tester.pumpWidget(_host(_sheet()));
+
+      // No AiSettings passed at all: the feature exists but cannot be used, and
+      // says so by being greyed rather than by failing on click.
+      final label = tester.widget<Text>(find.text('AI 生成'));
+      expect(label.style!.color, Palette.dark.textDim);
+    });
+  });
+
   testWidgets('the commit box renders a real input, not an error block',
       (tester) async {
     await tester.pumpWidget(_host(_sheet()));
 
-    expect(find.byType(TextField), findsOneWidget);
+    // Two fields now: the message box and the author override. Both must be
+    // real inputs, not the error placeholder.
+    expect(find.byType(TextField), findsNWidgets(2));
     // The framework's error widget renders its message as text; if the Material
     // ancestor goes missing again this is what shows up instead of the field.
     expect(find.textContaining('No Material widget'), findsNothing);
@@ -52,7 +99,7 @@ void main() {
 
     // Not an IME test — that needs a real input method and a real window. This
     // only pins that the field holds multi-byte text and shows it back.
-    await tester.enterText(find.byType(TextField), '修复提交弹窗缺少输入框');
+    await tester.enterText(_messageBox, '修复提交弹窗缺少输入框');
     await tester.pump();
 
     expect(find.text('修复提交弹窗缺少输入框'), findsOneWidget);
@@ -84,7 +131,7 @@ void main() {
       changes: const [FileStatus(path: 'src/main.js', status: 'M', staged: false)],
     )));
 
-    await tester.enterText(find.byType(TextField), '一些改动');
+    await tester.enterText(_messageBox, '一些改动');
     // The sheet header and the button both read 提交; the button comes last.
     await tester.tap(find.text('提交').last);
     await tester.pump();

@@ -1094,7 +1094,12 @@ pub fn get_unstaged_diff(path: String, file: String) -> Result<String, String> {
 }
 
 /// Staged changes: index vs HEAD tree (empty tree when the branch is unborn).
+/// An empty `file` means everything staged; git rejects `""` as a pathspec, and
+/// the raw (possibly empty) output is returned so callers can tell "nothing staged".
 pub fn get_staged_diff(path: String, file: String) -> Result<String, String> {
+    if file.is_empty() {
+        return run_git(&path, &["diff", "--cached"]);
+    }
     let out = run_git(&path, &["diff", "--cached", "--", file.as_str()])?;
     Ok(diff_placeholder(out))
 }
@@ -2709,6 +2714,17 @@ mod tests {
 
         let diff = get_unstaged_diff(repo.clone(), "new.txt".to_string()).unwrap();
         assert!(diff.contains("+hello"), "新增文件应显示内容，实际：{diff}");
+    }
+
+    #[test]
+    fn staged_diff_without_file_covers_everything_staged() {
+        let repo = temp_repo("staged_all");
+        assert_eq!(get_staged_diff(repo.clone(), String::new()).unwrap(), "");
+
+        std::fs::write(std::path::Path::new(&repo).join("a.txt"), "hello\n").unwrap();
+        run_git(&repo, &["add", "a.txt"]).unwrap();
+        let diff = get_staged_diff(repo.clone(), String::new()).unwrap();
+        assert!(diff.contains("+hello"), "应包含全部已暂存改动，实际：{diff}");
     }
 
     #[test]

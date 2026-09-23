@@ -49,17 +49,41 @@ void main() {
     await tester.tap(find.text('2').first);
     await tester.pump();
 
-    // A modified row carries two body indices, so one click selects two lines.
-    expect(find.text('已选 2 行'), findsOneWidget);
-
-    await tester.tap(find.text('暂存所选'));
+    await tester.tap(find.text('暂存选中行'));
     await tester.pump();
 
-    // The unselected "+c" must be dropped and the counts rewritten to match.
+    // A modified row carries two body indices, so one click selects two lines;
+    // the unselected "+c" must be dropped and the counts rewritten to match.
     expect(patch, '@@ -1,3 +1,3 @@ fn main\n a\n-b\n+B\n d\n');
     expect(reverse, isFalse);
+
     // Selection clears once applied, so a second click cannot stage it twice.
-    expect(find.textContaining('已选'), findsNothing);
+    patch = null;
+    await tester.tap(find.text('暂存选中行'));
+    await tester.pump();
+    expect(patch, isNull);
+  });
+
+  testWidgets('暂存此块 stages the whole hunk without picking lines',
+      (tester) async {
+    String? patch;
+    await tester.pumpWidget(_host(
+      DiffPane(
+        hunks: const [hunk],
+        mode: DiffMode.split,
+        onApply: (p, _) => patch = p,
+      ),
+    ));
+
+    expect(find.text('点选行，⇧ 点选范围'), findsOneWidget);
+    // Nothing picked yet: the partial button is there but does nothing.
+    await tester.tap(find.text('暂存选中行'));
+    await tester.pump();
+    expect(patch, isNull);
+
+    await tester.tap(find.text('暂存此块'));
+    await tester.pump();
+    expect(patch, hunk);
   });
 
   testWidgets('a staged file stages in reverse', (tester) async {
@@ -73,11 +97,11 @@ void main() {
       ),
     ));
 
+    expect(find.text('取消暂存此块'), findsOneWidget);
     await tester.tap(find.text('2').first);
     await tester.pump();
-    expect(find.text('取消暂存所选'), findsOneWidget);
 
-    await tester.tap(find.text('取消暂存所选'));
+    await tester.tap(find.text('取消暂存选中行'));
     await tester.pump();
     expect(reverse, isTrue);
   });
@@ -89,8 +113,8 @@ void main() {
 
     await tester.tap(find.text('2').first);
     await tester.pump();
-    expect(find.textContaining('已选'), findsNothing);
-    expect(find.text('暂存所选'), findsNothing);
+    expect(find.text('暂存此块'), findsNothing);
+    expect(find.text('暂存选中行'), findsNothing);
   });
 
   testWidgets('unified view renders raw patch lines', (tester) async {

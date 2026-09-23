@@ -5,10 +5,13 @@
 // 'flutter create' template.
 
 // The application's name. By default this is also the title of the Flutter window.
-PRODUCT_NAME = cgit_flutter
+PRODUCT_NAME = CGit
 
 // The application's bundle identifier
-PRODUCT_BUNDLE_IDENTIFIER = com.example.cgitFlutter
+// Shares the Tauri app's namespace (dev.lijing.cgit) but not its
+// identifier: two apps with the same bundle id confuse LaunchServices
+// when both are installed.
+PRODUCT_BUNDLE_IDENTIFIER = dev.lijing.cgit.flutter
 
 // The copyright displayed in application information
-PRODUCT_COPYRIGHT = Copyright © 2026 com.example. All rights reserved.
+PRODUCT_COPYRIGHT = Copyright © 2026 Ckales. MIT licensed.

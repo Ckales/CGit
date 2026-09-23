@@ -66,8 +66,8 @@ class RebasePlan {
 
   /// A plan that changes nothing is worth refusing: running it would rewrite
   /// every commit's hash for no benefit.
-  bool get isNoop => steps.every((s) => s.action == RebaseAction.pick) &&
-      !_reordered;
+  bool get isNoop =>
+      steps.every((s) => s.action == RebaseAction.pick) && !_reordered;
 
   bool _reorderedFlag = false;
   bool get _reordered => _reorderedFlag;

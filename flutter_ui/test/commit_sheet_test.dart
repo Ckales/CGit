@@ -30,13 +30,19 @@ Widget _host(Widget child) => MaterialApp(
 CommitSheet _sheet({List<FileStatus>? changes}) => CommitSheet(
       changes: changes ??
           const [
-            FileStatus(path: 'src/main.js', status: 'M', staged: true),
-            FileStatus(path: 'src/styles.css', status: 'M', staged: false),
+            FileStatus(path: 'src/main.js', status: 'modified', staged: true),
+            FileStatus(
+                path: 'src/styles.css', status: 'modified', staged: false),
           ],
       git: Git('/tmp'),
+      repoName: 'demo',
+      branch: 'dev',
+      diffPane: const SizedBox(),
       onClose: () {},
       onChanged: () async {},
       onPickFile: (_) {},
+      onCommitAndPush: () async {},
+      onCreatePatch: ({required bool toClipboard}) async {},
     );
 
 void main() {
@@ -76,8 +82,10 @@ void main() {
 
       // No AiSettings passed at all: the feature exists but cannot be used, and
       // says so by being greyed rather than by failing on click.
-      final label = tester.widget<Text>(find.text('AI 生成'));
-      expect(label.style!.color, Palette.dark.textDim);
+      final dimmed = tester.widget<Opacity>(find.descendant(
+          of: find.byTooltip('用 AI 生成提交说明'),
+          matching: find.byType(Opacity)));
+      expect(dimmed.opacity, 0.45);
     });
   });
 
@@ -85,9 +93,9 @@ void main() {
       (tester) async {
     await tester.pumpWidget(_host(_sheet()));
 
-    // Two fields now: the message box and the author override. Both must be
-    // real inputs, not the error placeholder.
-    expect(find.byType(TextField), findsNWidgets(2));
+    // Three fields: the path filter, the message box and the author override.
+    // All must be real inputs, not the error placeholder.
+    expect(find.byType(TextField), findsNWidgets(3));
     // The framework's error widget renders its message as text; if the Material
     // ancestor goes missing again this is what shows up instead of the field.
     expect(find.textContaining('No Material widget'), findsNothing);
@@ -105,12 +113,35 @@ void main() {
     expect(find.text('修复提交弹窗缺少输入框'), findsOneWidget);
   });
 
-  testWidgets('staged and unstaged files are grouped and counted',
+  testWidgets('changes show as a tree under the repo, like the Tauri dialog',
       (tester) async {
     await tester.pumpWidget(_host(_sheet()));
 
-    expect(find.text('已暂存 (1)'), findsOneWidget);
-    expect(find.text('未暂存 (1)'), findsOneWidget);
+    expect(find.text('demo  2 个文件'), findsOneWidget);
+    expect(find.text('src  2 个文件'), findsOneWidget);
+    expect(find.text('main.js'), findsOneWidget);
+    expect(find.text('styles.css'), findsOneWidget);
+    expect(find.text('M'), findsNWidgets(2), reason: '状态角标取首字母');
+  });
+
+  testWidgets('a path both staged and unstaged is labelled on each side',
+      (tester) async {
+    await tester.pumpWidget(_host(_sheet(changes: const [
+      FileStatus(path: 'a.txt', status: 'modified', staged: true),
+      FileStatus(path: 'a.txt', status: 'modified', staged: false),
+    ])));
+
+    expect(find.text('a.txt · 已暂存'), findsOneWidget);
+    expect(find.text('a.txt · 未暂存'), findsOneWidget);
+    expect(find.text('demo  1 个文件'), findsOneWidget);
+  });
+
+  testWidgets('folding a folder hides its files', (tester) async {
+    await tester.pumpWidget(_host(_sheet()));
+
+    await tester.tap(find.text('src  2 个文件'));
+    await tester.pump();
+    expect(find.text('main.js'), findsNothing);
   });
 
   testWidgets('committing an empty message is refused before touching git',
@@ -138,5 +169,25 @@ void main() {
 
     expect(find.text('没有已暂存的改动'), findsOneWidget);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('the path filter narrows the tree', (tester) async {
+    await tester.pumpWidget(_host(_sheet()));
+    await tester.enterText(
+        find.ancestor(
+            of: find.text('过滤路径'), matching: find.byType(TextField)),
+        'styles');
+    await tester.pump();
+
+    expect(find.text('styles.css'), findsOneWidget);
+    expect(find.text('main.js'), findsNothing);
+  });
+
+  testWidgets('提交并推送 is behind the split arrow, not next to 提交',
+      (tester) async {
+    await tester.pumpWidget(_host(_sheet()));
+    // Not on screen until the arrow is used — a stray click on 提交 must never
+    // reach the network.
+    expect(find.text('提交并推送'), findsNothing);
   });
 }

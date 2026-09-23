@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'context_menu.dart';
 import 'rebase_plan.dart';
 import 'theme.dart';
 
@@ -170,34 +171,20 @@ class _RebaseSheetState extends State<RebaseSheet> {
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       decoration: BoxDecoration(
         color: invalid ? p.red.withValues(alpha: 0.10) : null,
-        border: Border(bottom: BorderSide(color: p.border.withValues(alpha: 0.4))),
+        border:
+            Border(bottom: BorderSide(color: p.border.withValues(alpha: 0.4))),
       ),
       child: Row(
         children: [
           _arrow(p, '↑', i > 0, () => _move(i, -1)),
           _arrow(p, '↓', i < _plan.steps.length - 1, () => _move(i, 1)),
           const SizedBox(width: 8),
-          SizedBox(
-            width: 104,
-            child: DropdownButton<RebaseAction>(
-              value: step.action,
-              isDense: true,
-              isExpanded: true,
-              underline: const SizedBox.shrink(),
-              dropdownColor: p.bgElev,
-              style: ui.copyWith(color: p.text, fontSize: 12),
-              items: [
-                for (final a in RebaseAction.values)
-                  DropdownMenuItem(
-                    value: a,
-                    child: Text(rebaseActionLabels[a]!,
-                        style: ui.copyWith(
-                            color: a == RebaseAction.drop ? p.red : p.text,
-                            fontSize: 12)),
-                  ),
-              ],
-              onChanged: (a) => setState(() => step.action = a!),
-            ),
+          // The app's own menu rather than DropdownButton: its Material popup
+          // brings 48px rows and its own surface colour into a 24px-row list.
+          _ActionPicker(
+            action: step.action,
+            palette: p,
+            onPick: (a) => setState(() => step.action = a),
           ),
           const SizedBox(width: 8),
           Text(step.oid.substring(0, 7),
@@ -236,9 +223,8 @@ class _RebaseSheetState extends State<RebaseSheet> {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: ui.copyWith(
-                      color: step.action == RebaseAction.drop
-                          ? p.textDim
-                          : p.text,
+                      color:
+                          step.action == RebaseAction.drop ? p.textDim : p.text,
                       decoration: step.action == RebaseAction.drop
                           ? TextDecoration.lineThrough
                           : null,
@@ -252,8 +238,7 @@ class _RebaseSheetState extends State<RebaseSheet> {
 
   Widget _arrow(Palette p, String glyph, bool enabled, VoidCallback onTap) =>
       MouseRegion(
-        cursor:
-            enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
+        cursor: enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
         child: GestureDetector(
           onTap: enabled ? onTap : null,
           child: Container(
@@ -284,9 +269,7 @@ class _RebaseSheetState extends State<RebaseSheet> {
                 child: _autostash
                     ? const Text('✓',
                         style: TextStyle(
-                            fontSize: 9,
-                            color: Color(0xFFFFFFFF),
-                            height: 1))
+                            fontSize: 9, color: Color(0xFFFFFFFF), height: 1))
                     : null,
               ),
               const SizedBox(width: 6),
@@ -329,4 +312,74 @@ class _RebaseSheetState extends State<RebaseSheet> {
           ),
         ),
       );
+}
+
+/// The per-commit action picker: field-shaped, opening the app's flat menu.
+class _ActionPicker extends StatefulWidget {
+  const _ActionPicker({
+    required this.action,
+    required this.palette,
+    required this.onPick,
+  });
+
+  final RebaseAction action;
+  final Palette palette;
+  final void Function(RebaseAction) onPick;
+
+  @override
+  State<_ActionPicker> createState() => _ActionPickerState();
+}
+
+class _ActionPickerState extends State<_ActionPicker> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = widget.palette;
+    final drop = widget.action == RebaseAction.drop;
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: GestureDetector(
+        onTapUp: (_) => showRepoMenu(
+          context: context,
+          position: menuAnchorBelow(context),
+          items: [
+            for (final a in RebaseAction.values)
+              MenuAction(
+                rebaseActionLabels[a]!,
+                () => widget.onPick(a),
+                danger: a == RebaseAction.drop,
+                checked: a == widget.action,
+              ),
+          ],
+        ),
+        child: Container(
+          width: 104,
+          height: 22,
+          padding: const EdgeInsets.symmetric(horizontal: 6),
+          decoration: BoxDecoration(
+            color: _hover ? p.bgHover : p.bgElev,
+            border: Border.all(color: p.border),
+            borderRadius: BorderRadius.circular(4),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  rebaseActionLabels[widget.action]!,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style:
+                      ui.copyWith(color: drop ? p.red : p.text, fontSize: 12),
+                ),
+              ),
+              Chevron(color: p.textDim),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }

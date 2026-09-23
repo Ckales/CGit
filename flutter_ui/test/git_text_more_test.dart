@@ -50,6 +50,7 @@ String _dump(List<ConflictBlock> blocks) => jsonEncode([
     ]);
 
 void main() {
+  _blocks();
   _patchFileNameTests();
 
   group('conflict markers', () {
@@ -347,6 +348,41 @@ void _patchFileNameTests() {
       final name = patchFileName('提' * 80, maxLength: 5);
       expect(name, '0001-提提提提提.patch');
       expect(patchFileName('a' * 80).length, '0001-.patch'.length + 50);
+    });
+  });
+}
+
+/// ↑/↓ step by *block* — a run of changed lines — not by line. This is what
+/// makes navigating a diff feel like IDEA's rather than like holding the arrow
+/// key, and it is computed from the hunk text so navigation does not depend on
+/// which rows happen to be built.
+void _blocks() {
+  group('changeBlockRows', () {
+    const hunk = '@@ -1,6 +1,7 @@\n'
+        ' keep\n'
+        '-old one\n'
+        '-old two\n'
+        '+new one\n'
+        ' keep\n'
+        '+added\n';
+
+    test('a run of changed lines counts once', () {
+      // Rows 1..3 are one contiguous run; row 5 is a second.
+      expect(changeBlockRows(hunk, split: false), [1, 5]);
+    });
+
+    test('context-only hunks have no blocks', () {
+      expect(changeBlockRows('@@ -1,2 +1,2 @@\n a\n b\n', split: false),
+          isEmpty);
+    });
+
+    test('split mode counts the paired rows, not the raw lines', () {
+      // The two deletions pair with the one addition, so the same change is
+      // fewer rows — the indices have to follow the view or ↑/↓ scrolls to the
+      // wrong place.
+      final split = changeBlockRows(hunk, split: true);
+      expect(split, isNotEmpty);
+      expect(split.length, 2, reason: 'still two runs, different row numbers');
     });
   });
 }

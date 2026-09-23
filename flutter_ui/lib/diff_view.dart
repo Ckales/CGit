@@ -22,10 +22,16 @@ class DiffPane extends StatelessWidget {
     required this.mode,
     this.onApply,
     this.staged = false,
+    this.blockKeys = const {},
   });
 
   final List<String> hunks;
   final DiffMode mode;
+
+  /// Keys for the rows that start a run of changed lines, so ↑/↓ can scroll to
+  /// one. Keyed "hunkIndex:rowIndex"; the owner computes the same ids from
+  /// [changeBlockRows] and keeps the keys alive across rebuilds.
+  final Map<String, GlobalKey> blockKeys;
 
   /// Called with a rebuilt partial hunk ready for `git apply`. Null makes the
   /// pane read-only — the commit-detail view, where there is nothing to stage.
@@ -59,13 +65,15 @@ class DiffPane extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              for (final hunk in hunks)
+              for (final (i, hunk) in hunks.indexed)
                 _HunkView(
                   key: ValueKey(hunk),
                   hunk: hunk,
+                  index: i,
                   mode: mode,
                   onApply: onApply,
                   staged: staged,
+                  blockKeys: blockKeys,
                 ),
             ],
           ),
@@ -79,13 +87,17 @@ class _HunkView extends StatefulWidget {
   const _HunkView({
     super.key,
     required this.hunk,
+    required this.index,
     required this.mode,
     required this.onApply,
     required this.staged,
+    required this.blockKeys,
   });
 
   final String hunk;
+  final int index;
   final DiffMode mode;
+  final Map<String, GlobalKey> blockKeys;
   final void Function(String patch, bool reverse)? onApply;
   final bool staged;
 
@@ -94,6 +106,9 @@ class _HunkView extends StatefulWidget {
 }
 
 class _HunkViewState extends State<_HunkView> {
+  /// The key for a row, when that row starts a run of changed lines.
+  GlobalKey? _blockKey(int row) => widget.blockKeys['${widget.index}:\$row'];
+
   final _picked = <int>{};
   int? _anchor;
   int? _hovered;
@@ -154,12 +169,13 @@ class _HunkViewState extends State<_HunkView> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _HunkBar(
-          text: headerText,
-          pickedCount: _picked.length,
-          staged: widget.staged,
-          onApply: interactive && _picked.isNotEmpty ? _apply : null,
-        ),
+        if (interactive)
+          _HunkActions(
+            staged: widget.staged,
+            onWhole: () => widget.onApply!(widget.hunk, widget.staged),
+            onPicked: _picked.isNotEmpty ? () => _apply(widget.staged) : null,
+          ),
+        _HunkBar(text: headerText),
         if (widget.mode == DiffMode.unified)
           ..._unifiedRows(palette, interactive)
         else
@@ -185,6 +201,7 @@ class _HunkViewState extends State<_HunkView> {
               ? palette.red
               : palette.text;
       rows.add(_row(
+        row: i,
         picks: changed ? [i] : const [],
         interactive: interactive,
         palette: palette,
@@ -211,12 +228,13 @@ class _HunkViewState extends State<_HunkView> {
     if (paired == null) return _unifiedRows(palette, interactive);
 
     final rows = <Widget>[];
-    for (final row in paired.rows) {
+    for (final (i, row) in paired.rows.indexed) {
       IntraDiff? intra;
       if (row.type == RowType.mod) {
         intra = intraLineDiff(row.left!.text, row.right!.text);
       }
       rows.add(_row(
+        row: i,
         picks: row.picks,
         interactive: interactive,
         palette: palette,
@@ -258,6 +276,7 @@ class _HunkViewState extends State<_HunkView> {
   /// selected outline. In CSS this is three rules (`.pickable`, `.pickable:hover
   /// .split-text`, `.picked`); here every one of them is explicit state.
   Widget _row({
+    required int row,
     required List<int> picks,
     required bool interactive,
     required Palette palette,
@@ -269,6 +288,9 @@ class _HunkViewState extends State<_HunkView> {
     final hovered = pickable && _hovered == key;
 
     Widget content = DecoratedBox(
+      // The block key rides on the outermost node of the row so that
+      // ensureVisible scrolls the whole row into view, not just its text.
+      key: _blockKey(row),
       decoration: BoxDecoration(
         border: picked ? Border.all(color: palette.accent, width: 1) : null,
       ),
@@ -307,18 +329,45 @@ class _HunkViewState extends State<_HunkView> {
   }
 }
 
-class _HunkBar extends StatelessWidget {
-  const _HunkBar({
-    required this.text,
-    required this.pickedCount,
+/// The Tauri `.hunk-bar` above each working-file hunk: 暂存此块 applies the
+/// whole hunk, 暂存选中行 only the picked lines (dimmed until some are), and
+/// the hint says how picking works.
+class _HunkActions extends StatelessWidget {
+  const _HunkActions({
     required this.staged,
-    required this.onApply,
+    required this.onWhole,
+    required this.onPicked,
   });
 
-  final String text;
-  final int pickedCount;
   final bool staged;
-  final void Function(bool reverse)? onApply;
+  final VoidCallback onWhole;
+  final VoidCallback? onPicked;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = Theming.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 10, 8, 2),
+      child: Row(
+        children: [
+          _SmallButton(label: staged ? '取消暂存此块' : '暂存此块', onTap: onWhole),
+          const SizedBox(width: 4),
+          _SmallButton(label: staged ? '取消暂存选中行' : '暂存选中行', onTap: onPicked),
+          const Spacer(),
+          SelectionContainer.disabled(
+            child: Text('点选行，⇧ 点选范围',
+                style: ui.copyWith(color: palette.textDim, fontSize: 10)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _HunkBar extends StatelessWidget {
+  const _HunkBar({required this.text});
+
+  final String text;
 
   @override
   Widget build(BuildContext context) {
@@ -329,26 +378,11 @@ class _HunkBar extends StatelessWidget {
         color: palette.bgAlt,
         border: Border(bottom: BorderSide(color: palette.border)),
       ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Text(
-              text,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: mono.copyWith(color: palette.accent),
-            ),
-          ),
-          if (onApply != null) ...[
-            Text('已选 $pickedCount 行',
-                style: ui.copyWith(color: palette.textDim, fontSize: 11)),
-            const SizedBox(width: 8),
-            _SmallButton(
-              label: staged ? '取消暂存所选' : '暂存所选',
-              onTap: () => onApply!(staged),
-            ),
-          ],
-        ],
+      child: Text(
+        text,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: mono.copyWith(color: palette.accent),
       ),
     );
   }
@@ -453,10 +487,11 @@ class _HatchPainter extends CustomPainter {
   bool shouldRepaint(_HatchPainter old) => old.color != color;
 }
 
+/// `.hunk-btn`: accent text, filled accent on hover, 0.45 when disabled.
 class _SmallButton extends StatefulWidget {
   const _SmallButton({required this.label, required this.onTap});
   final String label;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
 
   @override
   State<_SmallButton> createState() => _SmallButtonState();
@@ -468,20 +503,28 @@ class _SmallButtonState extends State<_SmallButton> {
   @override
   Widget build(BuildContext context) {
     final palette = Theming.of(context);
+    final enabled = widget.onTap != null;
+    final hot = _hover && enabled;
     return MouseRegion(
-      cursor: SystemMouseCursors.click,
+      cursor: enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
       child: GestureDetector(
         onTap: widget.onTap,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-          decoration: BoxDecoration(
-            color: _hover ? palette.bgHover : palette.bgElev,
-            border: Border.all(color: palette.border),
-            borderRadius: BorderRadius.circular(4),
+        child: Opacity(
+          opacity: enabled ? 1 : 0.45,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 1),
+            decoration: BoxDecoration(
+              color: hot ? palette.accent : palette.bgElev,
+              border: Border.all(color: hot ? palette.accent : palette.border),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Text(widget.label,
+                style: ui.copyWith(
+                    fontSize: 11,
+                    color: hot ? const Color(0xFFFFFFFF) : palette.accent)),
           ),
-          child: Text(widget.label, style: ui.copyWith(fontSize: 11)),
         ),
       ),
     );

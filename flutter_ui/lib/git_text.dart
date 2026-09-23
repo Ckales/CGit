@@ -526,6 +526,37 @@ String assembleConflict(List<ConflictBlock> blocks) {
 
 /* ---------- change navigation ---------- */
 
+/// Row indices that start a run of changed rows in one hunk — what ↑/↓ step
+/// through, rather than every single changed line.
+///
+/// Pure, and deliberately mirroring how the pane builds its rows: unified mode
+/// has one row per body line, split mode one row per paired row. Computing it
+/// here instead of collecting keys while rendering keeps navigation working the
+/// same whether or not the rows are on screen.
+List<int> changeBlockRows(String hunk, {required bool split}) {
+  final changed = <bool>[];
+
+  final paired = split ? pairHunkLines(hunk) : null;
+  if (paired != null) {
+    for (final row in paired.rows) {
+      changed.add(row.picks.isNotEmpty);
+    }
+  } else {
+    final lines = hunk.replaceFirst(RegExp(r'\n\$'), '').split('\n').skip(1);
+    for (final line in lines) {
+      changed.add(line.startsWith('+') || line.startsWith('-'));
+    }
+  }
+
+  final starts = <int>[];
+  var prev = false;
+  for (var i = 0; i < changed.length; i++) {
+    if (changed[i] && !prev) starts.add(i);
+    prev = changed[i];
+  }
+  return starts;
+}
+
 enum ChangeTargetKind { block, file, none }
 
 class ChangeTarget {

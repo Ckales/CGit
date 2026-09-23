@@ -105,9 +105,8 @@ class _MergeWindowState extends State<MergeWindow> {
   /// listener: a listener also fires when the gutter buttons rewrite the text
   /// programmatically, which would record a machine-written line as a hand edit
   /// and make the block look decided when it is not.
-  TextEditingController _editor(ConflictBlock b, String initial) =>
-      _editors.putIfAbsent(
-          b, () => TextEditingController(text: b.edited ?? initial));
+  TextEditingController _editor(ConflictBlock b, String initial) => _editors
+      .putIfAbsent(b, () => TextEditingController(text: b.edited ?? initial));
 
   void _decide(ConflictBlock b, String side, bool take) {
     setState(() {
@@ -161,7 +160,8 @@ class _MergeWindowState extends State<MergeWindow> {
               children: [
                 _titleBar(p),
                 Expanded(
-                  child: _parsed.hasConflict ? _mergeGrid(p) : _wholeFilePane(p),
+                  child:
+                      _parsed.hasConflict ? _mergeGrid(p) : _wholeFilePane(p),
                 ),
                 _parsed.hasConflict ? _mergeActions(p) : _wholeFileActions(p),
               ],
@@ -280,7 +280,8 @@ class _MergeWindowState extends State<MergeWindow> {
             ])
               Expanded(
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                   child: Text(label,
                       style: ui.copyWith(color: p.textDim, fontSize: 11)),
                 ),
@@ -309,7 +310,8 @@ class _MergeWindowState extends State<MergeWindow> {
           children: [
             Expanded(child: _sideCell(p, b, 'ours')),
             Expanded(
-              child: _resultCell(p, b, b.resultLines.join('\n'), conflicted: true),
+              child:
+                  _resultCell(p, b, b.resultLines.join('\n'), conflicted: true),
             ),
             Expanded(child: _sideCell(p, b, 'theirs')),
           ],
@@ -467,8 +469,8 @@ class _MergeWindowState extends State<MergeWindow> {
           final travel = box.maxWidth - thumbW;
           final x = overflow <= 0 ? 0.0 : (_scrollX / overflow) * travel;
           return GestureDetector(
-            onHorizontalDragUpdate: (d) =>
-                _shift(d.delta.dx / (travel == 0 ? 1 : travel) * overflow, paneWidth),
+            onHorizontalDragUpdate: (d) => _shift(
+                d.delta.dx / (travel == 0 ? 1 : travel) * overflow, paneWidth),
             child: Container(
               color: p.bgAlt,
               child: Stack(
@@ -501,7 +503,8 @@ class _MergeWindowState extends State<MergeWindow> {
         left > 0
             ? '${_conflicts.length} 处冲突，$left 处未处理'
             : '${_conflicts.length} 处冲突，已全部处理',
-        style: ui.copyWith(color: left > 0 ? p.yellow : p.textDim, fontSize: 11),
+        style:
+            ui.copyWith(color: left > 0 ? p.yellow : p.textDim, fontSize: 11),
       ),
       const Spacer(),
       _Btn(label: '全部采用我方', onTap: () => _setAll(true, false)),
@@ -636,7 +639,8 @@ class _BtnState extends State<_Btn> {
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
           decoration: BoxDecoration(
             color: bg,
-            border: Border.all(color: widget.primary && enabled ? bg : p.border),
+            border:
+                Border.all(color: widget.primary && enabled ? bg : p.border),
             borderRadius: BorderRadius.circular(5),
           ),
           child: Text(

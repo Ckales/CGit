@@ -116,4 +116,37 @@ void main() {
     expect(find.text('第二次'), findsOneWidget,
         reason: 'a menu built once would still say 第一次');
   });
+
+  testWidgets('a dropdown opens in the same place wherever the button is clicked',
+      (tester) async {
+    await tester.pumpWidget(_host(
+      Builder(
+        builder: (context) => GestureDetector(
+          onTapUp: (_) => showRepoMenu(
+            context: context,
+            position: menuAnchorBelow(context),
+            items: [
+              const MenuAction.header('最近的项目'),
+              MenuAction('CGit', () {}, sublabel: '~/Work/codelab/CGit'),
+            ],
+          ),
+          child: const SizedBox(width: 200, height: 24, child: Text('pill')),
+        ),
+      ),
+    ));
+
+    final box = tester.getRect(find.text('pill'));
+    Future<Offset> openAt(Offset at) async {
+      await tester.tapAt(at);
+      await tester.pumpAndSettle();
+      final where = tester.getTopLeft(find.text('CGit'));
+      await tester.tapAt(const Offset(1, 1)); // dismiss
+      await tester.pumpAndSettle();
+      return where;
+    }
+
+    final left = await openAt(box.centerLeft + const Offset(5, 0));
+    final right = await openAt(box.centerRight - const Offset(5, 0));
+    expect(right, left, reason: 'the menu must not follow the pointer');
+  });
 }

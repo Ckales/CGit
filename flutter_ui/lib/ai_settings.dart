@@ -1,5 +1,8 @@
+import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import 'git_frb.dart';
 
 /// The default system prompt, verbatim from the Tauri app so both frontends
 /// produce the same kind of message from the same diff.
@@ -31,7 +34,12 @@ class AiSettings {
 
   static Future<AiSettings> load() async => AiSettings._(
         await SharedPreferences.getInstance(),
-        const FlutterSecureStorage(),
+        // The login keychain, not the data-protection one: that one needs a
+        // keychain-access-groups entitlement and a Team ID, and this app is
+        // ad-hoc signed, so every write there failed with -34018.
+        const FlutterSecureStorage(
+          mOptions: MacOsOptions(usesDataProtectionKeychain: false),
+        ),
       );
 
   final SharedPreferences _store;
@@ -46,14 +54,14 @@ class AiSettings {
   String get prompt => _store.getString(_keyPrompt) ?? defaultAiPrompt;
   Future<void> setPrompt(String v) => _store.setString(_keyPrompt, v);
 
-  /// Null when nothing is stored. Reading the Keychain can fail (a locked
-  /// keychain, a denied prompt); that is reported as "no token" rather than as
-  /// an error, because the caller's next move is the same either way.
+  /// Null when nothing is stored. A failed read (a locked keychain, a denied
+  /// or cancelled password prompt) is a [GitError], not null: swallowing it
+  /// sent an empty Bearer token and surfaced as a misleading HTTP 401.
   Future<String?> readToken() async {
     try {
       return await _secure.read(key: _secureToken);
-    } catch (_) {
-      return null;
+    } on PlatformException catch (e) {
+      throw GitError('读取钥匙串中的令牌失败：${e.message ?? e.code}');
     }
   }
 

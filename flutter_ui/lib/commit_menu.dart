@@ -31,7 +31,8 @@ List<MenuAction> commitMenu({
       MenuAction('重置(mixed)到此', () => run(CommitCommand.resetMixed)),
       MenuAction('重置(soft)到此', () => run(CommitCommand.resetSoft)),
       // The only one that destroys uncommitted work.
-      MenuAction('重置(hard)到此', () => run(CommitCommand.resetHard), danger: true),
+      MenuAction('重置(hard)到此', () => run(CommitCommand.resetHard),
+          danger: true),
       MenuAction('回退此提交', () => run(CommitCommand.revert)),
       MenuAction('拣选到当前分支', () => run(CommitCommand.cherryPick)),
       MenuAction('从此处交互式变基', () => run(CommitCommand.rebaseFrom)),

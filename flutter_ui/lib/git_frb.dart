@@ -79,7 +79,8 @@ class Git {
 
   Future<List<String>> tags() => _guard(() => rust.getTags(path: repo));
 
-  Future<List<RemoteInfo>> remotes() => _guard(() => rust.getRemotes(path: repo));
+  Future<List<RemoteInfo>> remotes() =>
+      _guard(() => rust.getRemotes(path: repo));
 
   Future<List<FileStatus>> status() => _guard(() => rust.getStatus(path: repo));
 
@@ -251,6 +252,12 @@ class Git {
   Future<String> stagedDiff({String file = ''}) =>
       _guard(() => rust.getStagedDiff(path: repo, file: file));
 
+  /// Working directory vs index. Used as the fallback when [hunks] comes back
+  /// empty: an untracked, newly added or binary file has no hunks to stage, but
+  /// it does have content worth showing.
+  Future<String> unstagedDiff({String file = ''}) =>
+      _guard(() => rust.getUnstagedDiff(path: repo, file: file));
+
   /// Recent commit messages, for the "reuse a past message" picker.
   Future<List<String>> recentMessages({int limit = 30}) => _guard(
       () => rust.getCommitMessages(path: repo, limit: BigInt.from(limit)));
@@ -406,7 +413,8 @@ class Git {
   Future<void> checkout(String name) =>
       _guard(() => rust.checkoutBranch(path: repo, name: name));
 
-  Future<void> createBranch(String name, {String? base, bool checkout = true}) =>
+  Future<void> createBranch(String name,
+          {String? base, bool checkout = true}) =>
       _guard(() => rust.createBranch(
             path: repo,
             name: name,
@@ -431,7 +439,8 @@ class Git {
 
   /* ---------- stash ---------- */
 
-  Future<List<StashEntry>> stashList() => _guard(() => rust.stashList(path: repo));
+  Future<List<StashEntry>> stashList() =>
+      _guard(() => rust.stashList(path: repo));
 
   /// An empty message lets git write its own ("WIP on main: …").
   Future<String> stashSave({String message = ''}) =>
@@ -447,7 +456,8 @@ class Git {
   /* ---------- network ---------- */
 
   /// Where HEAD stands against its upstream: branch, upstream, ahead, behind.
-  Future<Tracking> tracking() => _guard(() => rust.getBranchTracking(path: repo));
+  Future<Tracking> tracking() =>
+      _guard(() => rust.getBranchTracking(path: repo));
 
   /// The files a push would carry — what HEAD has and the upstream does not.
   Future<List<FileStatus>> pushFiles() =>
@@ -472,7 +482,8 @@ class Git {
   /* ---------- conflicts ---------- */
 
   /// Paths still carrying conflict markers in the index.
-  Future<List<String>> conflicts() => _guard(() => rust.getConflicts(path: repo));
+  Future<List<String>> conflicts() =>
+      _guard(() => rust.getConflicts(path: repo));
 
   /// Which multi-step operation the repo is in the middle of, or "none".
   /// The UI needs it to offer the *matching* continue/abort: `git merge --abort`
@@ -488,8 +499,8 @@ class Git {
       _guard(() => rust.resolveConflict(path: repo, file: file, side: side));
 
   /// Write the merged result and mark the file resolved.
-  Future<void> resolveWith(String file, String content) =>
-      _guard(() => rust.resolveWithContent(path: repo, file: file, content: content));
+  Future<void> resolveWith(String file, String content) => _guard(
+      () => rust.resolveWithContent(path: repo, file: file, content: content));
 
   /// Rewrite a file's markers in "merge" or "diff3" style. diff3 is the only way
   /// to get per-block common-ancestor text, and it regenerates the file from the

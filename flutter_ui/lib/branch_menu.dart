@@ -28,8 +28,7 @@ List<MenuAction> branchMenu({
 }) {
   final name = branch.name;
   return [
-    if (!branch.isCurrent)
-      MenuAction('检出', () => run(BranchCommand.checkout)),
+    if (!branch.isCurrent) MenuAction('检出', () => run(BranchCommand.checkout)),
     MenuAction("从 '$name' 新建分支…", () => run(BranchCommand.newFrom)),
     // Merging needs somewhere to merge *into*; a detached HEAD has no name to
     // put in the label and no branch to receive the merge.
@@ -45,8 +44,8 @@ List<MenuAction> branchMenu({
     // in a checkout. Flattened from the Tauri submenu: the choice is binary.
     if (branch.isCurrent) ...[
       MenuAction('应用补丁（从文件）…', () => run(BranchCommand.applyPatchFromFile)),
-      MenuAction('应用补丁（从剪贴板）',
-          () => run(BranchCommand.applyPatchFromClipboard)),
+      MenuAction(
+          '应用补丁（从剪贴板）', () => run(BranchCommand.applyPatchFromClipboard)),
     ],
     MenuAction('重命名…', () => run(BranchCommand.rename)),
     MenuAction(

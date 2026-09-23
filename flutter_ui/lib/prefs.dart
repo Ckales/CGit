@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// Window and view settings that survive a restart.
@@ -19,6 +21,10 @@ class Prefs {
   static const _keyHistoryHeight = 'cgit.historyHeight';
   static const _keyHistoryPageSize = 'cgit.historyPageSize';
   static const _keyPullStrategy = 'cgit.pullStrategy';
+  static const _keyFontSize = 'cgit.fontSize';
+  static const _keyEditor = 'cgit.editor';
+  static const _keyEditors = 'cgit.editors';
+  static const _keyProjectEditors = 'cgit.projectEditors';
   static const _keyRecentRepos = 'cgit.recentRepos';
 
   /// How many repositories the 打开 menu remembers. Beyond this the list stops
@@ -39,6 +45,15 @@ class Prefs {
   bool get isSplitDiff => _store.getString(_keyDiffView) != 'unified';
   Future<void> setSplitDiff(bool split) =>
       _store.setString(_keyDiffView, split ? 'split' : 'unified');
+
+  /// The base size everything else is scaled against, matching the Tauri app's
+  /// root `font-size`. Applied once as a text scale rather than threaded into
+  /// every style, which is what the CSS variable does there too.
+  static const fontSizes = [12, 13, 15];
+  static const baseFontSize = 13;
+
+  int get fontSize => _store.getInt(_keyFontSize) ?? baseFontSize;
+  Future<void> setFontSize(int v) => _store.setInt(_keyFontSize, v);
 
   /* ---------- layout ---------- */
 
@@ -63,6 +78,37 @@ class Prefs {
   String get pullStrategy => _store.getString(_keyPullStrategy) ?? 'ff-only';
   Future<void> setPullStrategy(String v) =>
       _store.setString(_keyPullStrategy, v);
+
+  /* ---------- editors ---------- */
+
+  /// The app name used for 编辑文件 and for projects with no choice of their
+  /// own. Empty means the system default handler.
+  String get editor => _store.getString(_keyEditor) ?? '';
+  Future<void> setEditor(String v) => _store.setString(_keyEditor, v);
+
+  /// The editors ticked in settings. Only these appear in the 打开项目 menu —
+  /// the scan finds every editor on the machine, which is not the same as the
+  /// ones this person uses.
+  List<String> get editors => _store.getStringList(_keyEditors) ?? const [];
+  Future<void> setEditors(List<String> v) =>
+      _store.setStringList(_keyEditors, v);
+
+  /// Per-project editor overrides, keyed by repository path.
+  Map<String, String> get projectEditors {
+    final raw = _store.getString(_keyProjectEditors);
+    if (raw == null || raw.isEmpty) return const {};
+    try {
+      final decoded = jsonDecode(raw) as Map<String, dynamic>;
+      return {for (final e in decoded.entries) e.key: e.value as String};
+    } on FormatException {
+      // A corrupt entry is dropped rather than repaired: the fallback is the
+      // default editor, which is what an absent entry means anyway.
+      return const {};
+    }
+  }
+
+  Future<void> setProjectEditors(Map<String, String> v) =>
+      _store.setString(_keyProjectEditors, jsonEncode(v));
 
   /* ---------- recent repositories ---------- */
 

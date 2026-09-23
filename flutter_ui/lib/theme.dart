@@ -90,3 +90,51 @@ const ui = TextStyle(
   fontSize: 13,
   height: 1.3,
 );
+
+/// The ⌄ used by every dropdown and menu button in this app.
+///
+/// Painted as the same stroke the Tauri app's select uses (a 10×6 viewBox,
+/// `M1 1.25 5 4.75 9 1.25`, 1.4 wide). Not `Icons.arrow_drop_down`:
+/// `pubspec.yaml` keeps `uses-material-design: false`, so that renders as a
+/// missing-glyph box. Not the text '▾' either: it is tiny in the system font.
+class Chevron extends StatelessWidget {
+  const Chevron({super.key, required this.color, this.size = 10});
+
+  final Color color;
+
+  /// Width; height is 0.6 of it, as in the SVG.
+  final double size;
+
+  @override
+  Widget build(BuildContext context) => CustomPaint(
+        size: Size(size, size * 0.6),
+        painter: _ChevronPainter(color),
+      );
+}
+
+class _ChevronPainter extends CustomPainter {
+  _ChevronPainter(this.color);
+
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final k = size.width / 10;
+    final path = Path()
+      ..moveTo(1 * k, 1.25 * k)
+      ..lineTo(5 * k, 4.75 * k)
+      ..lineTo(9 * k, 1.25 * k);
+    canvas.drawPath(
+      path,
+      Paint()
+        ..color = color
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.4 * k
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_ChevronPainter old) => old.color != color;
+}

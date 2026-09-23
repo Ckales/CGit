@@ -81,7 +81,8 @@ class _BlameRowState extends State<_BlameRow> {
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
       child: ColoredBox(
-        color: _hover ? p.bgHover.withValues(alpha: 0.4) : const Color(0x00000000),
+        color:
+            _hover ? p.bgHover.withValues(alpha: 0.4) : const Color(0x00000000),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [

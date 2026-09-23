@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:io' show Platform;
+
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -5,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'ai_settings.dart';
 import 'blame_view.dart';
 import 'branch_menu.dart';
+import 'clone_sheet.dart';
 import 'commit_menu.dart';
 import 'commit_sheet.dart';
 import 'context_menu.dart';
@@ -20,6 +24,7 @@ import 'rebase_plan.dart';
 import 'rebase_sheet.dart';
 import 'settings_sheet.dart';
 import 'theme.dart';
+import 'watch_debounce.dart';
 
 Future<void> main(List<String> args) async {
   // The Rust side lives in cgit_rust.framework; nothing below can call it until
@@ -48,29 +53,44 @@ class CGitApp extends StatefulWidget {
 
 class _CGitAppState extends State<CGitApp> {
   late Palette _palette = widget.prefs.isDark ? Palette.dark : Palette.light;
+  late int _fontSize = widget.prefs.fontSize;
+
+  /// Theme and font size, applied without saving. The settings dialog previews
+  /// with this and puts the stored values back when it is cancelled.
+  void _apply(bool dark, int fontSize) => setState(() {
+        _palette = dark ? Palette.dark : Palette.light;
+        _fontSize = fontSize;
+      });
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'cgit — Git 客户端',
       debugShowCheckedModeBanner: false,
-      home: Theming(
-        palette: _palette,
-        // This app draws its own chrome rather than using Scaffold, and Scaffold
-        // is what normally supplies the Material ancestor that TextField and the
-        // other material widgets assert on. Without this, the commit box renders
-        // as a red "No Material widget found" block instead of an input.
-        // `transparency` provides the ancestor without painting a background.
-        child: Material(
-          type: MaterialType.transparency,
-          child: RepoScreen(
-            startPath: widget.startPath,
-            prefs: widget.prefs,
-            onToggleTheme: () {
-              final dark = _palette != Palette.dark;
-              setState(() => _palette = dark ? Palette.dark : Palette.light);
-              widget.prefs.setDark(dark);
-            },
+      home: Builder(
+        builder: (context) => MediaQuery(
+          // The Tauri app sets one root `font-size` and lets every rem follow.
+          // A text scale is the same single knob here — the alternative is
+          // threading a size through a few hundred call sites.
+          data: MediaQuery.of(context).copyWith(
+            textScaler: TextScaler.linear(_fontSize / Prefs.baseFontSize),
+          ),
+          child: Theming(
+            palette: _palette,
+            // This app draws its own chrome rather than using Scaffold, and
+            // Scaffold is what normally supplies the Material ancestor that
+            // TextField and the other material widgets assert on. Without this,
+            // the commit box renders as a red "No Material widget found" block
+            // instead of an input. `transparency` provides the ancestor without
+            // painting a background.
+            child: Material(
+              type: MaterialType.transparency,
+              child: RepoScreen(
+                startPath: widget.startPath,
+                prefs: widget.prefs,
+                onApplyLook: _apply,
+              ),
+            ),
           ),
         ),
       ),
@@ -113,11 +133,13 @@ class RepoScreen extends StatefulWidget {
     super.key,
     required this.startPath,
     required this.prefs,
-    required this.onToggleTheme,
+    required this.onApplyLook,
   });
   final String startPath;
   final Prefs prefs;
-  final VoidCallback onToggleTheme;
+
+  /// Applies 主题 / 字号 to the whole app without saving them.
+  final void Function(bool dark, int fontSize) onApplyLook;
 
   @override
   State<RepoScreen> createState() => _RepoScreenState();
@@ -126,6 +148,12 @@ class RepoScreen extends StatefulWidget {
 class _RepoScreenState extends State<RepoScreen> {
   Git? _git;
   String _repoName = '未打开仓库';
+  String _repoPath = '';
+
+  /// The workspace root when several repos share one, the repo itself
+  /// otherwise — this is what the project pill names and what goes in the
+  /// recent list.
+  String _workspaceRoot = '';
   String _branch = '';
   String _status = '就绪';
 
@@ -138,13 +166,35 @@ class _RepoScreenState extends State<RepoScreen> {
   GraphCommit? _selectedCommit;
   List<FileStatus> _commitFiles = const [];
   DiffTarget _target = const NoDiff();
+
+  /// One entry per run of changed lines in the open diff, "hunkIndex:rowIndex",
+  /// in the order they appear. This is what ↑/↓ step through — IDEA steps by
+  /// block, not by line, and so does the Tauri version.
+  List<String> _blocks = const [];
+  final _blockKeys = <String, GlobalKey>{};
+  int _blockIndex = -1;
+
+  /// Where ← goes back to. Blame and file history take over the whole pane, so
+  /// without this the only way out of them is ✕, which closes everything.
+  DiffTarget? _paneBack;
   List<String> _hunks = const [];
+
+  /// Shown when a file has no hunks — untracked, newly added or binary. The
+  /// diff pane falls back to plain text rather than saying there is no diff,
+  /// which for a brand-new file would be wrong.
+  String _plainDiff = '';
   List<BlameLine> _blame = const [];
 
   late DiffMode _mode =
       widget.prefs.isSplitDiff ? DiffMode.split : DiffMode.unified;
   bool _commitOpen = false;
   bool _settingsOpen = false;
+  bool _cloneOpen = false;
+
+  /// Sibling repositories found alongside the open one, for the workspace
+  /// switcher. A single-repo folder leaves this at one entry and the switcher
+  /// stays hidden.
+  List<RepoRef> _workspaceRepos = const [];
 
   /// Files still carrying conflict markers, and which multi-step operation the
   /// repo is in the middle of ("none" when it is not). They travel together:
@@ -160,7 +210,10 @@ class _RepoScreenState extends State<RepoScreen> {
 
   /// Editors found on this machine, loaded once — the list only changes when
   /// the user installs something, which is not worth polling for.
-  List<String> _editors = const [];
+  /// App icons for the editors picked in settings, keyed by app name. Null
+  /// means "asked and there is none" — apps that pack icons into Assets.car
+  /// have none to extract, and that is a text-only button, not an error.
+  Map<String, Uint8List?> _editorIcons = const {};
   AiSettings? _ai;
   List<StashEntry> _stashes = const [];
   List<String> _remoteBranches = const [];
@@ -189,25 +242,49 @@ class _RepoScreenState extends State<RepoScreen> {
 
   final _historyScroll = ScrollController();
 
+  /// The file-system watcher for the open repo. Cancelled and replaced when
+  /// another repo is opened, so a closed repo stops driving refreshes.
+  StreamSubscription<String>? _watch;
+
+  /// Coalesces a burst of file events into one refresh, and decides its depth.
+  WatchDebounce? _watchDebounce;
+
   @override
   void initState() {
     super.initState();
     _openRepo(widget.startPath);
-    // Finding no editors is not an error worth reporting: the empty list just
-    // means every "open in editor" falls back to the system default.
     AiSettings.load().then((ai) {
       if (mounted) setState(() => _ai = ai);
     });
-    Git.editors().then(
-      (list) {
-        if (mounted) setState(() => _editors = list);
-      },
-      onError: (_) {},
-    );
+    _loadEditorIcons();
+  }
+
+  Future<void> _onSettingsSaved() async {
+    setState(() {
+      _settingsOpen = false;
+      _mode = widget.prefs.isSplitDiff ? DiffMode.split : DiffMode.unified;
+      _status = '设置已保存';
+    });
+    await _loadEditorIcons();
+    // 每页条数变了要重新取图，所以这里是全量刷新而不是只重画。
+    if (_git != null) await _refresh();
+  }
+
+  /// Fetched once per chosen editor and reused. Each one costs a `sips` call,
+  /// so this runs off the open path rather than inside the toolbar build.
+  Future<void> _loadEditorIcons() async {
+    final names = widget.prefs.editors;
+    final icons = await Future.wait(names.map(Git.editorIcon));
+    if (mounted) {
+      setState(() =>
+          _editorIcons = {for (final (i, n) in names.indexed) n: icons[i]});
+    }
   }
 
   @override
   void dispose() {
+    _watch?.cancel();
+    _watchDebounce?.cancel();
     _historyScroll.dispose();
     _searchText.dispose();
     _searchAuthor.dispose();
@@ -240,13 +317,70 @@ class _RepoScreenState extends State<RepoScreen> {
     }
     // A workspace can hold sibling repos; the sidebar picker for those is not
     // built yet, so open the first and keep the rest for when it is.
-    final repo = workspace.repos.first;
+    // A workspace can hold sibling repos; keep them for the switcher and open
+    // the one the user asked for when the path names it exactly.
+    final repo = workspace.repos.firstWhere(
+      (r) => r.path == path,
+      orElse: () => workspace.repos.first,
+    );
     setState(() {
       _git = Git(repo.path);
       _repoName = repo.name;
+      _repoPath = repo.path;
+      _workspaceRoot = workspace.root;
+      _workspaceRepos = workspace.repos;
     });
     await widget.prefs.rememberRepo(repo.path);
+    _startWatching(repo.path);
     await _refresh();
+  }
+
+  /// Watch the open repo so changes made outside this app — a commit from the
+  /// terminal, a checkout in an IDE — show up without pressing 刷新.
+  void _startWatching(String path) {
+    _watch?.cancel();
+    _watchDebounce?.cancel();
+
+    // A working-tree edit changes no commit and no branch label, so it gets the
+    // light refresh. A checkout or a commit made elsewhere does, and the watcher
+    // is the only thing that tells us about those — our own actions call
+    // _refresh() directly.
+    _watchDebounce = WatchDebounce(
+      onRefresh: (full) => full ? _refresh() : _refreshLight(),
+    );
+
+    _watch = Git(path).watch().listen(
+          _watchDebounce!.add,
+          // A watcher that dies is not worth a dialog: the manual refresh still
+          // works, and the next repo open starts a new one.
+          onError: (_) {},
+        );
+  }
+
+  /// Changes, branches and conflicts — everything a working-tree edit can move.
+  /// The commit graph is left alone because no commit changed.
+  Future<void> _refreshLight() async {
+    final git = _git;
+    if (git == null) return;
+    try {
+      final results = await Future.wait([
+        git.status(),
+        git.branches(),
+        git.conflicts(),
+        git.repoState(),
+      ]);
+      if (!mounted) return;
+      setState(() {
+        _changes = results[0] as List<FileStatus>;
+        _branches = results[1] as List<BranchInfo>;
+        _conflicts = results[2] as List<String>;
+        _op = results[3] as String;
+      });
+      await _reloadDiff();
+    } on GitError {
+      // A refresh the user did not ask for stays quiet; the next explicit
+      // action will report the same failure with context.
+    }
   }
 
   /// One reload for everything the window shows. The DOM version splits this
@@ -262,7 +396,7 @@ class _RepoScreenState extends State<RepoScreen> {
         git.tags(),
         git.remotes(),
         git.status(),
-        git.graph(),
+        git.graph(limit: widget.prefs.historyPageSize),
         git.conflicts(),
         git.repoState(),
         git.tracking(),
@@ -290,6 +424,102 @@ class _RepoScreenState extends State<RepoScreen> {
     }
   }
 
+  /// Recomputed from the hunks rather than collected while rendering, so ↑/↓
+  /// works the same whether or not a row has been built yet. Keys are reused
+  /// across rebuilds — a fresh GlobalKey every frame would detach the element
+  /// ensureVisible is aiming at.
+  void _recomputeBlocks() {
+    final split = _mode == DiffMode.split;
+    final blocks = <String>[];
+    for (final (i, hunk) in _hunks.indexed) {
+      for (final row in changeBlockRows(hunk, split: split)) {
+        blocks.add('$i:$row');
+      }
+    }
+    _blocks = blocks;
+    _blockIndex = -1;
+    _blockKeys.removeWhere((id, _) => !blocks.contains(id));
+    for (final id in blocks) {
+      _blockKeys.putIfAbsent(id, GlobalKey.new);
+    }
+  }
+
+  /// The files ↑/↓ walk into once the current one runs out, in the order of
+  /// whatever list produced this diff.
+  List<({String label, DiffTarget target})> get _navFiles => switch (_target) {
+        WorkingFileDiff() => [
+            for (final f in _changes)
+              (label: f.path, target: WorkingFileDiff(f.path, f.staged)),
+          ],
+        CommitFileDiff(:final oid) => [
+            for (final f in _commitFiles)
+              (label: f.path, target: CommitFileDiff(oid, f.path)),
+          ],
+        _ => const [],
+      };
+
+  int get _navIndex {
+    final path = switch (_target) {
+      WorkingFileDiff(:final path) => path,
+      CommitFileDiff(:final path) => path,
+      _ => null,
+    };
+    if (path == null) return -1;
+    return _navFiles.indexWhere((f) => f.label == path);
+  }
+
+  /// Step to the previous (-1) or next (+1) change, continuing into the
+  /// adjacent file once this one runs out — the behaviour of IDEA's ↑/↓.
+  Future<void> _navigateChange(int dir) async {
+    if (_git == null) return;
+    final files = _navFiles;
+
+    var target = nextChangeTarget(
+      blockIndex: _blockIndex,
+      blockCount: _blocks.length,
+      navIndex: _navIndex,
+      navCount: files.length,
+      dir: dir,
+    );
+
+    // Walk files until one actually renders a block: a binary file or a pure
+    // rename has nothing to step through, and stopping on it would look broken.
+    while (target.kind == ChangeTargetKind.file) {
+      setState(() => _target = files[target.index].target);
+      await _reloadDiff();
+      if (_blocks.isNotEmpty) {
+        _focusBlock(dir > 0 ? 0 : _blocks.length - 1);
+        return;
+      }
+      target = nextChangeTarget(
+        blockIndex: -1,
+        blockCount: 0,
+        navIndex: target.index,
+        navCount: files.length,
+        dir: dir,
+      );
+    }
+
+    if (target.kind == ChangeTargetKind.block) {
+      _focusBlock(target.index);
+      return;
+    }
+    setState(() => _status = dir > 0 ? '没有更多改动了' : '已经到第一处改动了');
+  }
+
+  void _focusBlock(int index) {
+    setState(() {
+      _blockIndex = index;
+      final where = _navIndex < 0 ? '' : ' — ${_navFiles[_navIndex].label}';
+      _status = '第 ${index + 1}/${_blocks.length} 处改动$where';
+    });
+    final ctx = _blockKeys[_blocks[index]]?.currentContext;
+    if (ctx != null) {
+      Scrollable.ensureVisible(ctx,
+          alignment: 0.3, duration: const Duration(milliseconds: 120));
+    }
+  }
+
   Future<void> _reloadDiff() async {
     final git = _git;
     if (git == null) return;
@@ -308,7 +538,24 @@ class _RepoScreenState extends State<RepoScreen> {
         // Blame renders from its own list, not from hunks.
         BlameTarget() => const Hunks(header: '', hunks: []),
       };
-      if (mounted) setState(() => _hunks = hunks.hunks);
+      // No hunks does not mean no content: an untracked or newly added file has
+      // everything to show and nothing to stage line by line.
+      var plain = '';
+      if (hunks.hunks.isEmpty) {
+        plain = switch (_target) {
+          WorkingFileDiff(:final path, :final staged) => staged
+              ? await git.stagedDiff(file: path)
+              : await git.unstagedDiff(file: path),
+          _ => '',
+        };
+      }
+      if (mounted) {
+        setState(() {
+          _hunks = hunks.hunks;
+          _plainDiff = plain;
+          _recomputeBlocks();
+        });
+      }
     } on GitError catch (e) {
       if (mounted) setState(() => _status = e.message);
     }
@@ -381,6 +628,35 @@ class _RepoScreenState extends State<RepoScreen> {
         autostash: autostash,
       ),
     );
+  }
+
+  /// Check out any ref by name — a remote branch, a tag, or a sha.
+  Future<void> _checkoutRef(String refName) => _stashAction(
+        '检出 $refName',
+        () => _git!.checkoutRef(refName),
+      );
+
+  Future<void> _showFileHistory(String file) async {
+    final git = _git;
+    if (git == null) return;
+    try {
+      final history = await git.fileHistory(file);
+      if (!mounted) return;
+      if (history.isEmpty) {
+        setState(() => _status = '$file 没有提交历史');
+        return;
+      }
+      // Reuses the search list: a file's history is a flat commit list with no
+      // lanes, exactly like a search result.
+      setState(() {
+        _searchResults = history;
+        _searchText.text = '';
+        _searchAuthor.text = '';
+        _status = '$file 的历史（${history.length} 条）';
+      });
+    } on GitError catch (e) {
+      if (mounted) setState(() => _status = e.message);
+    }
   }
 
   Future<void> _patchToClipboard(GraphCommit c) async {
@@ -526,23 +802,34 @@ class _RepoScreenState extends State<RepoScreen> {
         }),
         MenuAction('逐行归属 (blame)', () => _showBlame(f.path)),
         MenuAction('在编辑器中打开', () => _openFile(f.path)),
-        MenuAction('丢弃改动', () async {
-          if (!await _confirm(
-            title: '丢弃改动',
-            body: '丢弃「${f.path}」的改动？未提交的内容无法找回。',
-          )) {
-            return;
-          }
-          await _stashAction('丢弃 ${f.path} 的改动', () async {
-            await _git!.discard(f.path);
-            return '';
-          });
-        }, danger: true),
+        MenuAction('文件历史', () => _showFileHistory(f.path)),
+        MenuAction('丢弃改动', () => _discardFile(f), danger: true),
       ];
+
+  /// The diff shown belonged to the dialog; left open it would drop into the
+  /// main window on its own — the Tauri closeCommitDialog rule.
+  void _closeCommit() => setState(() {
+        _commitOpen = false;
+        _target = const NoDiff();
+        _paneBack = null;
+      });
+
+  Future<void> _discardFile(FileStatus f) async {
+    if (!await _confirm(
+      title: '丢弃改动',
+      body: '丢弃「${f.path}」的改动？未提交的内容无法找回。',
+    )) {
+      return;
+    }
+    await _stashAction('丢弃 ${f.path} 的改动', () async {
+      await _git!.discard(f.path);
+      return '';
+    });
+  }
 
   Future<void> _openFile(String file) async {
     try {
-      await _git!.openInEditor(file, editor: _editors.firstOrNull ?? '');
+      await _git!.openInEditor(file, editor: widget.prefs.editor);
     } on GitError catch (e) {
       if (mounted) setState(() => _status = e.message);
     }
@@ -590,6 +877,37 @@ class _RepoScreenState extends State<RepoScreen> {
     await _openRepo(dir);
   }
 
+  /// The whole working tree as one patch — core's `create_patch`, which is
+  /// what the 补丁 button in the commit dialog exports. Per-commit patches go
+  /// through [_patchToFile]; this one is the uncommitted work.
+  Future<void> _createWorkingPatch({required bool toClipboard}) async {
+    final git = _git;
+    if (git == null) return;
+    try {
+      final patch = await git.createPatch();
+      if (patch.trim().isEmpty) {
+        if (mounted) setState(() => _status = '没有可导出的改动');
+        return;
+      }
+      if (toClipboard) {
+        await git.copyToClipboard(patch);
+        if (mounted) setState(() => _status = '补丁已复制到剪贴板');
+        return;
+      }
+      final location = await getSaveLocation(
+        suggestedName: patchFileName(_repoName),
+        acceptedTypeGroups: const [
+          XTypeGroup(label: 'patch', extensions: ['patch', 'diff']),
+        ],
+      );
+      if (location == null) return;
+      await git.savePatch(location.path, patch);
+      if (mounted) setState(() => _status = '已导出补丁到 ${location.path}');
+    } on GitError catch (e) {
+      if (mounted) setState(() => _status = e.message);
+    }
+  }
+
   Future<void> _patchToFile(GraphCommit c) async {
     final git = _git;
     if (git == null) return;
@@ -619,6 +937,7 @@ class _RepoScreenState extends State<RepoScreen> {
       if (!mounted) return;
       setState(() {
         _blame = lines;
+        _paneBack = _target is BlameTarget ? _paneBack : _target;
         _target = BlameTarget(file);
       });
     } on GitError catch (e) {
@@ -627,7 +946,10 @@ class _RepoScreenState extends State<RepoScreen> {
   }
 
   Future<void> _showFile(FileStatus file) async {
-    setState(() => _target = WorkingFileDiff(file.path, file.staged));
+    setState(() {
+      _paneBack = null;
+      _target = WorkingFileDiff(file.path, file.staged);
+    });
     await _reloadDiff();
   }
 
@@ -732,6 +1054,12 @@ class _RepoScreenState extends State<RepoScreen> {
           },
         ),
       );
+
+  /// Right-click on 推送. `--force-with-lease`, so it still refuses to clobber
+  /// commits this repo has never seen — but it rewrites the remote branch, so
+  /// it is behind a right-click and marked dangerous rather than sitting next
+  /// to the ordinary push.
+  Future<void> _pushForce() => _network('强制推送', () => _git!.pushForce());
 
   /// Only asked when git config says nothing about `pull.rebase`. Cancelling
   /// aborts the push retry rather than picking a default — rebasing someone's
@@ -927,7 +1255,7 @@ class _RepoScreenState extends State<RepoScreen> {
       bindings: {
         const SingleActivator(LogicalKeyboardKey.keyO, meta: true): _pickRepo,
         const SingleActivator(LogicalKeyboardKey.comma, meta: true): () {
-          if (_git != null) setState(() => _settingsOpen = true);
+          setState(() => _settingsOpen = true);
         },
         const SingleActivator(LogicalKeyboardKey.enter, meta: true): () {
           if (_git != null) setState(() => _commitOpen = true);
@@ -955,14 +1283,16 @@ class _RepoScreenState extends State<RepoScreen> {
         const SingleActivator(LogicalKeyboardKey.escape): () {
           // Innermost first: the sheet the user is looking at closes, not
           // whatever happens to be listed first.
-          if (_settingsOpen) {
+          if (_cloneOpen) {
+            setState(() => _cloneOpen = false);
+          } else if (_settingsOpen) {
             setState(() => _settingsOpen = false);
           } else if (_rebasePlan != null) {
             setState(() => _rebasePlan = null);
           } else if (_mergeFile != null) {
             setState(() => _mergeFile = null);
           } else if (_commitOpen) {
-            setState(() => _commitOpen = false);
+            _closeCommit();
           }
         },
       },
@@ -1003,6 +1333,16 @@ class _RepoScreenState extends State<RepoScreen> {
                     _statusBar(p),
                   ],
                 ),
+                if (_cloneOpen)
+                  CloneSheet(
+                    onClose: () => setState(() => _cloneOpen = false),
+                    pickDirectory: () =>
+                        getDirectoryPath(confirmButtonText: '选择'),
+                    onCloned: (path) {
+                      setState(() => _cloneOpen = false);
+                      _openRepo(path);
+                    },
+                  ),
                 if (_rebasePlan != null)
                   RebaseSheet(
                     plan: _rebasePlan!,
@@ -1010,11 +1350,14 @@ class _RepoScreenState extends State<RepoScreen> {
                     onClose: () => setState(() => _rebasePlan = null),
                     onStart: _startRebase,
                   ),
-                if (_settingsOpen && _git != null)
+                if (_settingsOpen)
                   SettingsSheet(
-                    git: _git!,
+                    git: _git,
+                    prefs: widget.prefs,
                     ai: _ai,
                     onClose: () => setState(() => _settingsOpen = false),
+                    onPreview: widget.onApplyLook,
+                    onSaved: _onSettingsSaved,
                   ),
                 if (_mergeFile != null)
                   MergeWindow(
@@ -1029,9 +1372,23 @@ class _RepoScreenState extends State<RepoScreen> {
                   CommitSheet(
                     changes: _changes,
                     git: _git!,
-                    onClose: () => setState(() => _commitOpen = false),
+                    repoName: _repoName,
+                    branch: _branch,
+                    diffPane: _diffPane(p),
+                    selected: switch (_target) {
+                      WorkingFileDiff(:final path, :final staged) => (
+                          path: path,
+                          staged: staged
+                        ),
+                      _ => null,
+                    },
+                    menuFor: _fileMenu,
+                    onDiscard: _discardFile,
+                    onClose: _closeCommit,
                     onChanged: _refresh,
                     onPickFile: _showFile,
+                    onCommitAndPush: _push,
+                    onCreatePatch: _createWorkingPatch,
                     ai: _ai,
                   ),
               ],
@@ -1043,6 +1400,16 @@ class _RepoScreenState extends State<RepoScreen> {
   }
 
   Widget _toolbar(Palette p) {
+    final multi = _workspaceRepos.length > 1;
+    // Left: where you are. Centre pill: which project, and the way to switch.
+    // Right: the actions. Same split as the Tauri toolbar — 打开…/克隆… live in
+    // the pill menu and 主题/差异视图 in 设置 → 外观, so neither is a button here.
+    final where = _git == null
+        ? '未打开仓库'
+        : multi
+            ? '$_repoPath   ·   $_branch   （工作区共 ${_workspaceRepos.length} 个仓库）'
+            : '$_repoPath   ·   $_branch';
+
     return Container(
       height: 38,
       padding: const EdgeInsets.symmetric(horizontal: 8),
@@ -1050,98 +1417,184 @@ class _RepoScreenState extends State<RepoScreen> {
         color: p.bgAlt,
         border: Border(bottom: BorderSide(color: p.border)),
       ),
-      child: Row(
-        children: [
-          Text(_git == null ? '未打开仓库' : '$_repoName — $_branch',
-              style: ui.copyWith(color: p.textDim)),
-          _trackingChip(p),
-          const Spacer(),
-          _ToolButton(
-              label: '提交',
-              enabled: _git != null,
-              onTap: () {
-                setState(() => _commitOpen = true);
-              }),
-          // Disabled while any network action runs: they all move the same refs,
-          // and a fetch racing a push fails in ways that are nobody's fault.
-          _ToolButton(
-            label: '推送',
-            enabled: _git != null && !_netBusy,
-            onTap: _push,
-            tooltip: _tracking == null ? null : pushTargetText(_tracking!),
-          ),
-          _ToolButton(
-              label: '拉取', enabled: _git != null && !_netBusy, onTap: _pull),
-          _ToolButton(
-              label: '抓取', enabled: _git != null && !_netBusy, onTap: _fetch),
-          _ToolButton(
-            label: '打开…',
-            enabled: true,
-            onTap: _pickRepo,
-            // Right-click reaches the recent list without a dialog; left-click
-            // still goes straight to the picker, which is what a fresh install
-            // needs and what an empty list would offer anyway.
-            onSecondaryTapAt: (pos) {
-              final recent = widget.prefs.recentRepos;
-              if (recent.isEmpty) return;
-              showRepoMenu(
-                context: context,
-                position: pos,
-                items: [
-                  for (final path in recent)
-                    MenuAction(path.split('/').last, () => _openRepo(path)),
-                ],
-              );
-            },
-          ),
-          _ToolButton(
-            label: '打开项目',
-            enabled: _git != null,
-            tooltip: _editors.isEmpty ? '用系统默认程序打开' : '用 ${_editors.first} 打开',
-            onTap: () async {
-              try {
-                await _git!.openProject(editor: _editors.firstOrNull ?? '');
-              } on GitError catch (e) {
-                if (mounted) setState(() => _status = e.message);
-              }
-            },
-            // Right-click picks a different editor, when more than one is here.
-            onSecondaryTapAt: _editors.length < 2
-                ? null
-                : (pos) => showRepoMenu(
-                      context: context,
-                      position: pos,
-                      items: [
-                        for (final e in _editors)
-                          MenuAction(e, () async {
-                            try {
-                              await _git!.openProject(editor: e);
-                            } on GitError catch (err) {
-                              if (mounted) {
-                                setState(() => _status = err.message);
-                              }
-                            }
-                          }),
-                      ],
-                    ),
-          ),
-          _ToolButton(
-            label: '设置',
-            enabled: _git != null,
-            tooltip: '⌘,',
-            onTap: () => setState(() => _settingsOpen = true),
-          ),
-          _ToolButton(label: '刷新', enabled: _git != null, onTap: _refresh),
-          _ToolButton(
-            label: _mode == DiffMode.split ? '并排' : '统一',
-            enabled: true,
-            onTap: () => setState(() => _mode =
-                _mode == DiffMode.split ? DiffMode.unified : DiffMode.split),
-          ),
-          _ToolButton(label: '主题', enabled: true, onTap: widget.onToggleTheme),
-        ],
+      // Same layout as the Tauri toolbar: the pill is centred on the window,
+      // not placed in the row, so the buttons stay flush right. The path stops
+      // 200px short of centre (half the pill's cap plus a gap) so a long one
+      // never slides under it.
+      child: LayoutBuilder(
+        builder: (context, box) => Stack(
+          alignment: Alignment.center,
+          children: [
+            Row(
+              children: [
+                ConstrainedBox(
+                  constraints: BoxConstraints(
+                      maxWidth:
+                          (box.maxWidth / 2 - 200).clamp(0, box.maxWidth)),
+                  child: Text(
+                    where,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: ui.copyWith(color: p.textDim),
+                  ),
+                ),
+                _trackingChip(p),
+                const Spacer(),
+                _ToolButton(
+                    label: '提交',
+                    enabled: _git != null,
+                    tooltip: '提交 (⌘↵)',
+                    onTap: () => setState(() => _commitOpen = true)),
+                // Disabled while any network action runs: they all move the same refs,
+                // and a fetch racing a push fails in ways that are nobody's fault.
+                _ToolButton(
+                  label: '推送',
+                  enabled: _git != null && !_netBusy,
+                  onTap: _push,
+                  tooltip: _tracking == null
+                      ? '推送 (⌘P) — 右键可强制推送'
+                      : '${pushTargetText(_tracking!)} — 右键可强制推送',
+                  onSecondaryTapAt: _git == null
+                      ? null
+                      : (pos) => showRepoMenu(
+                            context: context,
+                            position: pos,
+                            items: [
+                              MenuAction(
+                                  '强制推送 (--force-with-lease)', _pushForce,
+                                  danger: true),
+                            ],
+                          ),
+                ),
+                _ToolButton(
+                    label: '拉取',
+                    enabled: _git != null && !_netBusy,
+                    tooltip: '拉取 (⌘L)',
+                    onTap: _pull),
+                _ToolButton(
+                    label: '抓取',
+                    enabled: _git != null && !_netBusy,
+                    tooltip: '抓取 (⌘T)',
+                    onTap: _fetch),
+                _ToolButton(
+                  label: '设置',
+                  enabled: true,
+                  tooltip: '设置 (⌘,)',
+                  onTap: () => setState(() => _settingsOpen = true),
+                ),
+                const SizedBox(width: 6),
+                _OpenProjectButton(
+                  palette: p,
+                  enabled: _git != null,
+                  editor: _projectEditor,
+                  icon: _editorIcons[_projectEditor],
+                  onOpen: () => _openProject(_projectEditor),
+                  onPickAt: _showEditorMenu,
+                ),
+              ],
+            ),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 360),
+              child: _ProjectPill(
+                label: _git == null
+                    ? '未打开仓库'
+                    : multi
+                        ? '${_projectName(_workspaceRoot)} / $_repoName'
+                        : _repoName,
+                tooltip: _git == null ? '打开一个仓库' : where,
+                palette: p,
+                onTapAt: _showProjectMenu,
+              ),
+            ),
+          ],
+        ),
       ),
     );
+  }
+
+  static String _projectName(String path) {
+    final parts = path.split('/').where((s) => s.isNotEmpty);
+    return parts.isEmpty ? path : parts.last;
+  }
+
+  /// `~` for the home directory, the way the Tauri recent list prints paths.
+  String _prettyPath(String path) {
+    final home = Platform.environment['HOME'] ?? '';
+    return home.isNotEmpty && path.startsWith('$home/')
+        ? '~${path.substring(home.length)}'
+        : path;
+  }
+
+  /// Which editor opens the current project: its own choice if it has one,
+  /// otherwise the default. Empty means the system handler.
+  String get _projectEditor =>
+      widget.prefs.projectEditors[_repoPath] ?? widget.prefs.editor;
+
+  void _showProjectMenu(Offset pos) {
+    final recent = widget.prefs.recentRepos;
+    showRepoMenu(
+      context: context,
+      position: pos,
+      items: [
+        MenuAction('打开…', _pickRepo),
+        MenuAction('克隆仓库…', () => setState(() => _cloneOpen = true)),
+        if (_workspaceRepos.length > 1) ...[
+          const MenuAction.header('工作区仓库'),
+          for (final r in _workspaceRepos)
+            MenuAction(
+              r.name,
+              () => _openRepo(r.path),
+              sublabel: r.branch,
+              current: r.path == _repoPath,
+            ),
+        ],
+        if (recent.isNotEmpty) ...[
+          const MenuAction.header('最近的项目'),
+          for (final path in recent)
+            MenuAction(
+              _projectName(path),
+              () => _openRepo(path),
+              sublabel: _prettyPath(path),
+              current: path == _workspaceRoot,
+            ),
+        ],
+      ],
+    );
+  }
+
+  void _showEditorMenu(Offset pos) {
+    final editors = widget.prefs.editors;
+    showRepoMenu(
+      context: context,
+      position: pos,
+      items: [
+        if (editors.isEmpty)
+          MenuAction('去设置里添加编辑器…', () => setState(() => _settingsOpen = true))
+        else ...[
+          MenuAction('系统默认', () => _setProjectEditor('')),
+          for (final e in editors)
+            MenuAction(e, () => _setProjectEditor(e),
+                enabled: e != _projectEditor),
+        ],
+      ],
+    );
+  }
+
+  Future<void> _setProjectEditor(String editor) async {
+    final map = {...widget.prefs.projectEditors};
+    // An empty choice is stored, not dropped: "this project uses the system
+    // handler" has to survive a later change of the default editor.
+    map[_repoPath] = editor;
+    await widget.prefs.setProjectEditors(map);
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _openProject(String editor) async {
+    try {
+      await _git!.openProject(editor: editor);
+    } on GitError catch (e) {
+      if (mounted) setState(() => _status = e.message);
+    }
   }
 
   Widget _sidebar(Palette p) {
@@ -1153,6 +1606,18 @@ class _RepoScreenState extends State<RepoScreen> {
       child: ListView(
         padding: const EdgeInsets.symmetric(vertical: 6),
         children: [
+          // Only with siblings: a 仓库 list holding one entry is a heading that
+          // tells you nothing, which is why the Tauri sidebar hides it too.
+          if (_workspaceRepos.length > 1) ...[
+            _SectionHead(label: '仓库', palette: p),
+            for (final r in _workspaceRepos)
+              _SidebarRow(
+                label: r.branch.isEmpty ? r.name : '${r.name} — ${r.branch}',
+                palette: p,
+                active: r.path == _repoPath,
+                onTap: () => _openRepo(r.path),
+              ),
+          ],
           _SectionHead(
             label: '分支',
             palette: p,
@@ -1217,7 +1682,12 @@ class _RepoScreenState extends State<RepoScreen> {
                     danger: true,
                   ),
                 ],
-                child: _SidebarRow(label: rb, palette: p),
+                child: _SidebarRow(
+                  label: rb,
+                  palette: p,
+                  // git DWIMs origin/foo into a local tracking branch.
+                  onTap: () => _checkoutRef(rb),
+                ),
               ),
           ],
           _SectionHead(
@@ -1230,6 +1700,8 @@ class _RepoScreenState extends State<RepoScreen> {
           for (final tag in _tags)
             ContextMenuRegion(
               items: () => [
+                MenuAction('推送标签到远端',
+                    () => _network('推送标签 $tag', () => _git!.pushTag(tag))),
                 MenuAction(
                   '删除标签',
                   () => _stashAction(
@@ -1240,7 +1712,13 @@ class _RepoScreenState extends State<RepoScreen> {
                   danger: true,
                 ),
               ],
-              child: _SidebarRow(label: tag, palette: p),
+              child: _SidebarRow(
+                label: tag,
+                palette: p,
+                // Checking out a tag detaches HEAD, which git handles and the
+                // banner will report.
+                onTap: () => _checkoutRef(tag),
+              ),
             ),
           _SectionHead(
             label: '储藏',
@@ -1327,7 +1805,10 @@ class _RepoScreenState extends State<RepoScreen> {
             widget.prefs.setHistoryHeight(260);
           },
         ),
-        Expanded(child: _diffPane(p)),
+        // While the commit dialog is open it has the diff pane — one pane, one
+        // place, as the Tauri app moves the element. Building it here too would
+        // also mount its block GlobalKeys twice.
+        Expanded(child: _commitOpen ? const SizedBox() : _diffPane(p)),
       ],
     );
   }
@@ -1348,9 +1829,58 @@ class _RepoScreenState extends State<RepoScreen> {
 
     return Column(
       children: [
-        _PaneHead(title: title, palette: p),
+        _PaneHead(
+          title: title,
+          palette: p,
+          onBack: _paneBack == null
+              ? null
+              : () async {
+                  setState(() {
+                    _target = _paneBack!;
+                    _paneBack = null;
+                  });
+                  await _reloadDiff();
+                },
+          actions: _target is NoDiff
+              ? const []
+              : [
+                  (
+                    label: '\u2191',
+                    tooltip: '上一处改动（到头则跳上一个文件）',
+                    onTap: () => _navigateChange(-1),
+                  ),
+                  (
+                    label: '\u2193',
+                    tooltip: '下一处改动（到底则跳下一个文件）',
+                    onTap: () => _navigateChange(1),
+                  ),
+                  (
+                    label: _mode == DiffMode.split ? '并排' : '统一',
+                    tooltip: '切换并排 / 统一视图',
+                    onTap: () => setState(() {
+                          _mode = _mode == DiffMode.split
+                              ? DiffMode.unified
+                              : DiffMode.split;
+                          // Split and unified pair lines differently, so the block
+                          // positions move with the view.
+                          _recomputeBlocks();
+                        }),
+                  ),
+                  (
+                    label: '✕',
+                    tooltip: '关闭差异区',
+                    onTap: () => setState(() {
+                          _target = const NoDiff();
+                          _paneBack = null;
+                        }),
+                  ),
+                ],
+        ),
         Expanded(
           child: Row(
+            // Stretch, or a short diff shrinks to its content and floats in the
+            // middle of the pane instead of starting at the top.
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               if (_selectedCommit != null && _target is CommitFileDiff)
                 SizedBox(
@@ -1395,12 +1925,15 @@ class _RepoScreenState extends State<RepoScreen> {
                         await _reloadDiff();
                       },
                     ),
-                  _ => DiffPane(
-                      hunks: _hunks,
-                      mode: _mode,
-                      staged: staged,
-                      onApply: interactive ? _applyPartial : null,
-                    ),
+                  _ => _hunks.isEmpty && _plainDiff.trim().isNotEmpty
+                      ? _PlainDiff(text: _plainDiff, palette: p)
+                      : DiffPane(
+                          blockKeys: _blockKeys,
+                          hunks: _hunks,
+                          mode: _mode,
+                          staged: staged,
+                          onApply: interactive ? _applyPartial : null,
+                        ),
                 },
               ),
             ],
@@ -1410,20 +1943,27 @@ class _RepoScreenState extends State<RepoScreen> {
     );
   }
 
+  /// Same as the Tauri pane head: a bold 历史 and two search boxes sharing
+  /// the width, filled rather than outlined.
   Widget _historyHead(Palette p) => Container(
-        height: 26,
+        height: 32,
         padding: const EdgeInsets.symmetric(horizontal: 8),
         decoration: BoxDecoration(
-          color: p.bgAlt,
+          color: p.bg,
           border: Border(bottom: BorderSide(color: p.border)),
         ),
         child: Row(
           children: [
-            Text('历史', style: ui.copyWith(color: p.textDim, fontSize: 11)),
-            const SizedBox(width: 10),
-            _searchField(p, _searchText, '搜索提交说明', 200),
-            const SizedBox(width: 6),
-            _searchField(p, _searchAuthor, '作者', 120),
+            Text('历史',
+                style: ui.copyWith(
+                    color: p.textDim,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 0.5)),
+            const SizedBox(width: 8),
+            Expanded(child: _searchField(p, _searchText, '搜索提交说明')),
+            const SizedBox(width: 8),
+            Expanded(child: _searchField(p, _searchAuthor, '作者')),
             if (_searchResults != null) ...[
               const SizedBox(width: 8),
               Text('${_searchResults!.length} 条结果',
@@ -1437,36 +1977,34 @@ class _RepoScreenState extends State<RepoScreen> {
     Palette p,
     TextEditingController controller,
     String hint,
-    double width,
-  ) =>
-      SizedBox(
-        width: width,
-        height: 20,
-        child: TextField(
-          controller: controller,
-          style: ui.copyWith(color: p.text, fontSize: 11),
-          cursorColor: p.accent,
-          // Searching runs git log, so it waits for Enter rather than firing on
-          // every keystroke the way a client-side filter could.
-          onSubmitted: (_) => _runSearch(),
-          decoration: InputDecoration(
-            isDense: true,
-            contentPadding: const EdgeInsets.symmetric(horizontal: 6),
-            hintText: hint,
-            hintStyle: ui.copyWith(color: p.textDim, fontSize: 11),
-            filled: true,
-            fillColor: p.bg,
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(3),
-              borderSide: BorderSide(color: p.border),
-            ),
-            enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(3),
-              borderSide: BorderSide(color: p.border),
-            ),
-          ),
-        ),
-      );
+  ) {
+    OutlineInputBorder border(Color color) => OutlineInputBorder(
+          borderRadius: BorderRadius.circular(4),
+          borderSide: BorderSide(color: color),
+        );
+    return TextField(
+      controller: controller,
+      style: ui.copyWith(color: p.text, fontSize: 11),
+      cursorColor: p.accent,
+      // Searching runs git log, so it waits for Enter rather than firing on
+      // every keystroke the way a client-side filter could.
+      onSubmitted: (_) => _runSearch(),
+      decoration: InputDecoration(
+        isDense: true,
+        // 22px box like the Tauri one: 11px × 1.3 line + 8px each side, less
+        // the 8px desktop's compact visual density takes off. `constraints`
+        // does not work here — it grows the widget but not the painted box.
+        contentPadding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+        hintText: hint,
+        hintStyle: ui.copyWith(color: p.textDim, fontSize: 11),
+        filled: true,
+        fillColor: p.bgElev,
+        border: border(p.border),
+        enabledBorder: border(p.border),
+        focusedBorder: border(p.accent),
+      ),
+    );
+  }
 
   /// Search results are a flat list: searchCommits has no parent links, so
   /// there are no lanes to draw and pretending otherwise would draw a wrong
@@ -1702,6 +2240,195 @@ class _ToolButtonState extends State<_ToolButton> {
 }
 
 /// The ＋ / ⤓ button some sidebar sections carry.
+/// The toolbar's repo label when the workspace holds more than one repository.
+/// The centre pill: which project is open, and the menu that switches it.
+///
+/// It carries the *project* name — the workspace root for a multi-repo
+/// workspace — while the left label carries the full path. Same division as the
+/// Tauri toolbar: the pill is for recognising and switching, the label is for
+/// knowing exactly where you are.
+class _ProjectPill extends StatefulWidget {
+  const _ProjectPill({
+    required this.label,
+    required this.tooltip,
+    required this.palette,
+    required this.onTapAt,
+  });
+
+  final String label;
+  final String tooltip;
+  final Palette palette;
+  final void Function(Offset position) onTapAt;
+
+  @override
+  State<_ProjectPill> createState() => _ProjectPillState();
+}
+
+class _ProjectPillState extends State<_ProjectPill> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = widget.palette;
+    return Tooltip(
+      message: widget.tooltip,
+      waitDuration: const Duration(milliseconds: 600),
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => _hover = true),
+        onExit: (_) => setState(() => _hover = false),
+        child: GestureDetector(
+          onTap: () => widget.onTapAt(menuAnchorBelow(context)),
+          child: Container(
+            constraints: const BoxConstraints(maxWidth: 260),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            decoration: BoxDecoration(
+              color: _hover ? p.bgHover : p.bgElev,
+              border: Border.all(color: p.border),
+              borderRadius: BorderRadius.circular(5),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Flexible(
+                  child: Text(widget.label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: ui.copyWith(color: p.text)),
+                ),
+                const SizedBox(width: 6),
+                Chevron(color: p.textDim),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 打开项目: one button that opens, one arrow that picks which editor opens it.
+///
+/// A split button rather than a right-click, because "which editor" is a choice
+/// people change often enough to deserve a visible control — the Tauri toolbar
+/// draws it the same way, with the chosen editor's own icon on the main half.
+class _OpenProjectButton extends StatefulWidget {
+  const _OpenProjectButton({
+    required this.palette,
+    required this.enabled,
+    required this.editor,
+    required this.icon,
+    required this.onOpen,
+    required this.onPickAt,
+  });
+
+  final Palette palette;
+  final bool enabled;
+  final String editor;
+  final Uint8List? icon;
+  final VoidCallback onOpen;
+  final void Function(Offset position) onPickAt;
+
+  @override
+  State<_OpenProjectButton> createState() => _OpenProjectButtonState();
+}
+
+class _OpenProjectButtonState extends State<_OpenProjectButton> {
+  bool _hoverMain = false;
+  bool _hoverArrow = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = widget.palette;
+    final on = widget.enabled;
+    final icon = widget.icon;
+
+    return Tooltip(
+      message:
+          widget.editor.isEmpty ? '用系统默认程序打开当前项目' : '用 ${widget.editor} 打开当前项目',
+      waitDuration: const Duration(milliseconds: 600),
+      child: Container(
+        decoration: BoxDecoration(
+          border: Border.all(color: p.border),
+          borderRadius: BorderRadius.circular(5),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            MouseRegion(
+              cursor: on ? SystemMouseCursors.click : SystemMouseCursors.basic,
+              onEnter: (_) => setState(() => _hoverMain = true),
+              onExit: (_) => setState(() => _hoverMain = false),
+              child: GestureDetector(
+                onTap: on ? widget.onOpen : null,
+                child: Container(
+                  height: 24,
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                  color: on && _hoverMain ? p.bgHover : p.bgElev,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (icon != null) ...[
+                        SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: Image.memory(icon),
+                        ),
+                        const SizedBox(width: 5),
+                      ],
+                      Text('打开项目',
+                          style: ui.copyWith(color: on ? p.text : p.textDim)),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            Container(width: 1, height: 24, color: p.border),
+            MouseRegion(
+              cursor: on ? SystemMouseCursors.click : SystemMouseCursors.basic,
+              onEnter: (_) => setState(() => _hoverArrow = true),
+              onExit: (_) => setState(() => _hoverArrow = false),
+              child: GestureDetector(
+                onTapUp: on ? (d) => widget.onPickAt(d.globalPosition) : null,
+                child: Container(
+                  height: 24,
+                  width: 20,
+                  alignment: Alignment.center,
+                  color: on && _hoverArrow ? p.bgHover : p.bgElev,
+                  child: Chevron(color: on ? p.text : p.textDim),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// A file with no hunks: shown verbatim, with no per-line staging because
+/// there is nothing for `git apply` to act on.
+class _PlainDiff extends StatelessWidget {
+  const _PlainDiff({required this.text, required this.palette});
+  final String text;
+  final Palette palette;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        color: palette.diffBg,
+        child: SelectionArea(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(8),
+            child: SizedBox(
+              width: double.infinity,
+              child: Text(text, style: mono.copyWith(color: palette.text)),
+            ),
+          ),
+        ),
+      );
+}
+
 class _SectionAction {
   const _SectionAction(this.glyph, this.tooltip, this.onTap);
   final String glyph;
@@ -1748,10 +2475,23 @@ class _SectionHead extends StatelessWidget {
   }
 }
 
+typedef PaneAction = ({String label, String tooltip, VoidCallback onTap});
+
 class _PaneHead extends StatelessWidget {
-  const _PaneHead({required this.title, required this.palette});
+  const _PaneHead({
+    required this.title,
+    required this.palette,
+    this.onBack,
+    this.actions = const [],
+  });
+
   final String title;
   final Palette palette;
+
+  /// Shown only when there is somewhere to go back to — an always-visible
+  /// arrow that does nothing is worse than no arrow.
+  final VoidCallback? onBack;
+  final List<PaneAction> actions;
 
   @override
   Widget build(BuildContext context) {
@@ -1759,16 +2499,87 @@ class _PaneHead extends StatelessWidget {
       height: 26,
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 8),
-      alignment: Alignment.centerLeft,
       decoration: BoxDecoration(
         color: palette.bgAlt,
         border: Border(bottom: BorderSide(color: palette.border)),
       ),
-      child: Text(
-        title,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: ui.copyWith(color: palette.textDim, fontSize: 11),
+      child: Row(
+        children: [
+          if (onBack != null)
+            _PaneHeadButton(
+              label: '\u2190',
+              tooltip: '返回上一视图',
+              onTap: onBack,
+              palette: palette,
+            ),
+          Expanded(
+            child: Text(
+              title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: ui.copyWith(color: palette.textDim, fontSize: 11),
+            ),
+          ),
+          for (final a in actions)
+            _PaneHeadButton(
+              label: a.label,
+              tooltip: a.tooltip,
+              onTap: a.onTap,
+              palette: palette,
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PaneHeadButton extends StatefulWidget {
+  const _PaneHeadButton({
+    required this.label,
+    required this.tooltip,
+    required this.onTap,
+    required this.palette,
+  });
+
+  final String label;
+  final String tooltip;
+  final VoidCallback? onTap;
+  final Palette palette;
+
+  @override
+  State<_PaneHeadButton> createState() => _PaneHeadButtonState();
+}
+
+class _PaneHeadButtonState extends State<_PaneHeadButton> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = widget.palette;
+    final on = widget.onTap != null;
+    return Tooltip(
+      message: widget.tooltip,
+      waitDuration: const Duration(milliseconds: 600),
+      child: MouseRegion(
+        cursor: on ? SystemMouseCursors.click : SystemMouseCursors.basic,
+        onEnter: (_) => setState(() => _hover = true),
+        onExit: (_) => setState(() => _hover = false),
+        child: GestureDetector(
+          onTap: widget.onTap,
+          child: Container(
+            margin: const EdgeInsets.symmetric(horizontal: 2),
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              color: on && _hover ? p.bgHover : null,
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: Text(
+              widget.label,
+              style:
+                  ui.copyWith(color: on ? p.textDim : p.border, fontSize: 11),
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -1820,7 +2631,7 @@ class _SidebarRowState extends State<_SidebarRow> {
         onTap: widget.onTap,
         onTapUp: widget.onTapAt == null
             ? null
-            : (d) => widget.onTapAt!(d.globalPosition),
+            : (_) => widget.onTapAt!(menuAnchorBelow(context)),
         child: Container(
           height: 22,
           padding: const EdgeInsets.symmetric(horizontal: 10),

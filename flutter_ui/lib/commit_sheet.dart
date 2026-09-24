@@ -6,8 +6,14 @@ import 'git.dart';
 import 'git_text.dart';
 import 'theme.dart';
 
+/// One repo's rows in the change tree.
+typedef RepoChanges = ({RepoRef repo, List<FileStatus> changes});
+
 /// The commit modal, laid out like the Tauri one: the change tree and commit
 /// box on the left, the main window's diff pane on the right.
+///
+/// Like the Tauri dialog it spans the workspace: one tree per repo with
+/// changes, and 提交 commits every repo that has something staged.
 ///
 /// The Tauri app moves the diff pane element into the dialog while it is open.
 /// The Flutter equivalent is [diffPane]: main.dart hands over the widget it
@@ -16,10 +22,8 @@ import 'theme.dart';
 class CommitSheet extends StatefulWidget {
   const CommitSheet({
     super.key,
-    required this.changes,
-    required this.git,
-    required this.repoName,
-    required this.branch,
+    required this.groups,
+    required this.active,
     required this.diffPane,
     required this.onClose,
     required this.onChanged,
@@ -31,34 +35,41 @@ class CommitSheet extends StatefulWidget {
     this.onDiscard,
     this.ai,
     this.docked = false,
+    this.gitFor = Git.new,
   });
 
   /// Inline under the history, scoped to the repo picked in the sidebar — the
   /// Tauri docked commit panel — instead of a dialog over the window.
   final bool docked;
 
-  final List<FileStatus> changes;
-  final Git git;
-  final String repoName;
-  final String branch;
+  /// Every workspace repo with changes, in sidebar order. Docked, only the
+  /// active repo.
+  final List<RepoChanges> groups;
+
+  /// The repo the main window is on. 修正提交, 历史说明 and 补丁 act on it alone:
+  /// each repo has its own HEAD, and rewording several at once is a guess.
+  final RepoRef active;
   final Widget diffPane;
   final VoidCallback onClose;
   final Future<void> Function() onChanged;
-  final void Function(FileStatus file) onPickFile;
+  final void Function(RepoRef repo, FileStatus file) onPickFile;
 
   /// The file the diff pane is showing, highlighted in the tree.
-  final ({String path, bool staged})? selected;
+  final ({String repo, String path, bool staged})? selected;
 
   /// The same right-click menu the main window's changes list uses.
-  final List<MenuAction> Function(FileStatus file)? menuFor;
+  final List<MenuAction> Function(RepoRef repo, FileStatus file)? menuFor;
 
   /// 丢弃 on an unstaged row. The caller confirms first.
-  final Future<void> Function(FileStatus file)? onDiscard;
+  final Future<void> Function(RepoRef repo, FileStatus file)? onDiscard;
 
-  /// Runs after a successful commit. Push is the caller's business — it owns
-  /// the network lock and the rejected-push retry, neither of which belongs in
-  /// a dialog.
-  final Future<void> Function() onCommitAndPush;
+  /// Runs after a successful commit with the repos committed. Push is the
+  /// caller's business — it owns the network lock and the rejected-push retry,
+  /// neither of which belongs in a dialog.
+  final Future<void> Function(List<String> repoPaths) onCommitAndPush;
+
+  /// Tests hand in fakes; the app uses the real bridge.
+  final Git Function(String path) gitFor;
 
   /// Export the working-tree changes as a patch. `toClipboard` picks between
   /// the clipboard and a save dialog.
@@ -85,6 +96,8 @@ class _CommitSheetState extends State<CommitSheet> {
   /// across refreshes so staging a file does not reopen what was folded.
   final _collapsed = <String>{};
 
+  Git get _activeGit => widget.gitFor(widget.active.path);
+
   @override
   void dispose() {
     _message.dispose();
@@ -99,7 +112,7 @@ class _CommitSheetState extends State<CommitSheet> {
     setState(() => _amend = on);
     if (!on || _message.text.trim().isNotEmpty) return;
     try {
-      final head = await widget.git.headMessage();
+      final head = await _activeGit.headMessage();
       if (mounted) _message.text = head.trim();
     } on GitError {
       // No HEAD yet (an empty repo): nothing to prefill, and amend will fail
@@ -116,11 +129,21 @@ class _CommitSheetState extends State<CommitSheet> {
       _error = null;
     });
     try {
-      final diff = await widget.git.stagedDiff();
-      if (diff.trim().isEmpty) {
+      // Every repo's staged diff, headed by its name when there are several —
+      // the Tauri stagedPatch.
+      final parts = <String>[];
+      for (final g in widget.groups) {
+        if (!g.changes.any((f) => f.staged)) continue;
+        final diff = await widget.gitFor(g.repo.path).stagedDiff();
+        if (diff.trim().isEmpty) continue;
+        parts.add(
+            widget.groups.length > 1 ? '# 仓库：${g.repo.name}\n$diff' : diff);
+      }
+      if (parts.isEmpty) {
         setState(() => _error = '没有已暂存的改动可供生成');
         return;
       }
+      final diff = parts.join('\n');
       final token = await ai.readToken() ?? '';
       final text = await Git.aiChat(
         url: aiEndpoint(ai.baseUrl),
@@ -139,7 +162,7 @@ class _CommitSheetState extends State<CommitSheet> {
 
   Future<void> _pickPastMessage(Offset at) async {
     try {
-      final messages = await widget.git.recentMessages();
+      final messages = await _activeGit.recentMessages();
       if (!mounted || messages.isEmpty) return;
       await showRepoMenu(
         context: context,
@@ -160,10 +183,21 @@ class _CommitSheetState extends State<CommitSheet> {
 
   /// Everything, before the filter. 提交 and ＋全部 act on these — filtering the
   /// list must not quietly change what a button does to the repository.
-  List<FileStatus> get _staged =>
-      widget.changes.where((f) => f.staged).toList();
+  List<FileStatus> get _allChanges => [
+        for (final g in widget.groups) ...g.changes,
+      ];
+  List<FileStatus> get _staged => _allChanges.where((f) => f.staged).toList();
   List<FileStatus> get _unstaged =>
-      widget.changes.where((f) => !f.staged).toList();
+      _allChanges.where((f) => !f.staged).toList();
+
+  /// ＋全部 / −全部 across the workspace, repo by repo.
+  Future<void> _stageEverything({required bool stage}) async {
+    for (final g in widget.groups) {
+      final git = widget.gitFor(g.repo.path);
+      if (stage && g.changes.any((f) => !f.staged)) await git.stageAll();
+      if (!stage && g.changes.any((f) => f.staged)) await git.unstageAll();
+    }
+  }
 
   Future<void> _run(Future<void> Function() action) async {
     setState(() {
@@ -186,24 +220,60 @@ class _CommitSheetState extends State<CommitSheet> {
       setState(() => _error = '提交说明不能为空');
       return;
     }
-    // Amending is allowed with nothing staged — it rewords HEAD.
-    if (_staged.isEmpty && !_amend) {
+    // Amending rewords the active repo's HEAD and is allowed with nothing
+    // staged. A plain commit goes to every repo with something staged, one
+    // `git commit` each — the Tauri doCommit.
+    final targets = <RepoRef>[];
+    if (_amend) {
+      targets.add(widget.active);
+    } else {
+      for (final g in widget.groups) {
+        if (g.changes.any((f) => f.staged)) targets.add(g.repo);
+      }
+    }
+    if (targets.isEmpty) {
       setState(() => _error = '没有已暂存的改动');
       return;
     }
-    await _run(() => widget.git.commit(
-          text,
-          amend: _amend,
-          signoff: _signoff,
-          author: _author.text.trim().isEmpty ? null : _author.text.trim(),
-        ));
-    if (mounted && _error == null) {
-      _message.clear();
-      widget.onClose();
-      // Closed first: the push reports through the status bar, and a dialog
-      // sitting on top of it would hide the one thing worth watching.
-      if (push) await widget.onCommitAndPush();
+
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    final author = _author.text.trim();
+    final committed = <String>[];
+    final failures = <String>[];
+    for (final repo in targets) {
+      try {
+        await widget.gitFor(repo.path).commit(
+              text,
+              amend: _amend,
+              signoff: _signoff,
+              author: author.isEmpty ? null : author,
+            );
+        committed.add(repo.path);
+      } on GitError catch (e) {
+        failures
+            .add(targets.length > 1 ? '${repo.name}：${e.message}' : e.message);
+      }
     }
+    await widget.onChanged();
+    if (!mounted) return;
+    setState(() => _busy = false);
+
+    // Not atomic: a hook refusing one repo leaves the others committed. The
+    // failed ones keep their staged files, so the dialog stays up to retry.
+    if (failures.isNotEmpty) {
+      setState(() => _error = committed.isEmpty
+          ? failures.join('\n')
+          : '已提交 ${committed.length} 个仓库，失败：\n${failures.join('\n')}');
+      return;
+    }
+    _message.clear();
+    widget.onClose();
+    // Closed first: the push reports through the status bar, and a dialog
+    // sitting on top of it would hide the one thing worth watching.
+    if (push) await widget.onCommitAndPush(committed);
   }
 
   @override
@@ -215,9 +285,8 @@ class _CommitSheetState extends State<CommitSheet> {
       children: [
         Row(
           children: [
-            Text(widget.docked ? '提交 · ${widget.repoName}' : '提交',
-                style:
-                    ui.copyWith(color: p.text, fontWeight: FontWeight.w600)),
+            Text(widget.docked ? '提交 · ${widget.active.name}' : '提交',
+                style: ui.copyWith(color: p.text, fontWeight: FontWeight.w600)),
             const Spacer(),
             _Btn(
               tooltip: widget.docked ? '收起' : '关闭 (Esc)',
@@ -294,7 +363,13 @@ class _CommitSheetState extends State<CommitSheet> {
               ui.copyWith(color: color ?? p.text, fontSize: size, height: 1.4));
 
   Widget _changesColumn(Palette p) {
-    final hasChanges = widget.changes.isNotEmpty;
+    // 补丁 exports the active repo's working tree only.
+    var hasChanges = false;
+    for (final g in widget.groups) {
+      if (g.repo.path == widget.active.path && g.changes.isNotEmpty) {
+        hasChanges = true;
+      }
+    }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -320,7 +395,7 @@ class _CommitSheetState extends State<CommitSheet> {
               icon: true,
               onTap: _busy || _unstaged.isEmpty
                   ? null
-                  : () => _run(() => widget.git.stageAll()),
+                  : () => _run(() => _stageEverything(stage: true)),
               child: _label(p, '＋全部'),
             ),
             const SizedBox(width: 8),
@@ -329,12 +404,12 @@ class _CommitSheetState extends State<CommitSheet> {
               icon: true,
               onTap: _busy || _staged.isEmpty
                   ? null
-                  : () => _run(() => widget.git.unstageAll()),
+                  : () => _run(() => _stageEverything(stage: false)),
               child: _label(p, '−全部'),
             ),
             const SizedBox(width: 8),
             _Btn(
-              tooltip: '把本地改动导出成补丁（右键复制到剪贴板）',
+              tooltip: '把 ${widget.active.name} 的本地改动导出成补丁（右键复制到剪贴板）',
               icon: true,
               onTap: _busy || !hasChanges
                   ? null
@@ -369,19 +444,34 @@ class _CommitSheetState extends State<CommitSheet> {
 
   Widget _tree(Palette p) {
     final needle = _filter.text.trim().toLowerCase();
-    final files = needle.isEmpty
-        ? widget.changes
-        : widget.changes
-            .where((f) => f.path.toLowerCase().contains(needle))
-            .toList();
-    if (files.isEmpty) {
+    final rows = <Widget>[];
+    for (final g in widget.groups) {
+      final files = needle.isEmpty
+          ? g.changes
+          : g.changes
+              .where((f) => f.path.toLowerCase().contains(needle))
+              .toList();
+      if (files.isEmpty) continue;
+      rows.addAll(_repoRows(p, g.repo, files, forceOpen: needle.isNotEmpty));
+    }
+    if (rows.isEmpty) {
       return Padding(
         padding: const EdgeInsets.all(6),
         child: Text(needle.isEmpty ? '工作区干净' : '没有匹配的文件',
             style: ui.copyWith(color: p.textDim, fontSize: 12)),
       );
     }
+    return ListView(children: rows);
+  }
 
+  /// One repo's root row and, unless folded, its folders and files. A filter
+  /// forces every node open, or a match could sit in a folded folder.
+  List<Widget> _repoRows(
+    Palette p,
+    RepoRef repo,
+    List<FileStatus> files, {
+    required bool forceOpen,
+  }) {
     // A path staged and then edited again shows up twice. Both stay leaves,
     // and only that pair gets a 已暂存 / 未暂存 suffix — the Tauri rule.
     final occurrences = <String, int>{};
@@ -397,14 +487,13 @@ class _CommitSheetState extends State<CommitSheet> {
       leaves.add(leaf);
     }
     final root = pathTree(leaves, collapseSingleChild: false);
-    // A filter forces every node open, or a match could sit in a folded folder.
-    final forceOpen = needle.isNotEmpty;
 
     final rows = <Widget>[];
     void addNode(TreeNode node, String parent, int depth) {
       for (final dir in node.dirs) {
         final path = parent.isEmpty ? dir.name : '$parent/${dir.name}';
-        final key = 'dir|$path';
+        // Keyed by repo too: two repos can both have a src/.
+        final key = 'dir|${repo.path}|$path';
         final open = forceOpen || !_collapsed.contains(key);
         final dirFiles = <FileStatus>[];
         void collect(TreeNode n) {
@@ -421,7 +510,7 @@ class _CommitSheetState extends State<CommitSheet> {
           depth: depth,
           open: open,
           onToggle: forceOpen ? null : () => _toggleNode(key),
-          check: _groupCheck(p, dirFiles),
+          check: _groupCheck(p, repo, dirFiles),
           children: [
             FolderIcon(color: p.textDim),
             const SizedBox(width: 6),
@@ -442,6 +531,7 @@ class _CommitSheetState extends State<CommitSheet> {
         final name = f.path.split('/').last;
         rows.add(_fileRow(
           p,
+          repo,
           f,
           depth,
           (occurrences[f.path] ?? 0) > 1
@@ -451,24 +541,25 @@ class _CommitSheetState extends State<CommitSheet> {
       }
     }
 
-    const rootKey = 'root';
+    final rootKey = 'root|${repo.path}';
     final rootOpen = forceOpen || !_collapsed.contains(rootKey);
     rows.add(_TreeRow(
       depth: 0,
       open: rootOpen,
       onToggle: forceOpen ? null : () => _toggleNode(rootKey),
-      check: _groupCheck(p, files),
+      check: _groupCheck(p, repo, files),
+      tooltip: repo.path,
       children: [
         Flexible(
           child: Text(
-            '${widget.repoName}  ${_distinctPaths(files)} 个文件',
+            '${repo.name}  ${_distinctPaths(files)} 个文件',
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: ui.copyWith(
                 color: p.accent, fontSize: 12, fontWeight: FontWeight.w700),
           ),
         ),
-        if (widget.branch.isNotEmpty) ...[
+        if (repo.branch.isNotEmpty) ...[
           const SizedBox(width: 6),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
@@ -476,15 +567,14 @@ class _CommitSheetState extends State<CommitSheet> {
               color: p.bgElev,
               borderRadius: BorderRadius.circular(3),
             ),
-            child: Text(widget.branch,
+            child: Text(repo.branch,
                 style: ui.copyWith(color: p.textDim, fontSize: 10)),
           ),
         ],
       ],
     ));
     if (rootOpen) addNode(root, '', 1);
-
-    return ListView(children: rows);
+    return rows;
   }
 
   static int _distinctPaths(List<FileStatus> files) =>
@@ -498,7 +588,7 @@ class _CommitSheetState extends State<CommitSheet> {
   /// is staged, dashed when some are. Clicking stages the rest, or unstages
   /// all when everything already was. Conflicts are left out — they have to be
   /// resolved, not staged from a checkbox.
-  Widget _groupCheck(Palette p, List<FileStatus> files) {
+  Widget _groupCheck(Palette p, RepoRef repo, List<FileStatus> files) {
     final actionable = files.where((f) => f.status != 'conflict').toList();
     final stagedCount = actionable.where((f) => f.staged).length;
     final all = actionable.isNotEmpty && stagedCount == actionable.length;
@@ -509,37 +599,41 @@ class _CommitSheetState extends State<CommitSheet> {
       onTap: _busy || actionable.isEmpty
           ? null
           : () => _run(() => all
-              ? widget.git.unstageAll(files: paths)
-              : widget.git.stageAll(files: paths)),
+              ? widget.gitFor(repo.path).unstageAll(files: paths)
+              : widget.gitFor(repo.path).stageAll(files: paths)),
     );
   }
 
-  Widget _fileRow(Palette p, FileStatus f, int depth, String label) {
+  Widget _fileRow(
+      Palette p, RepoRef repo, FileStatus f, int depth, String label) {
     final conflict = f.status == 'conflict';
     final sel = widget.selected;
     return _TreeRow(
       depth: depth,
       leaf: true,
-      selected: sel != null && sel.path == f.path && sel.staged == f.staged,
+      selected: sel != null &&
+          sel.repo == repo.path &&
+          sel.path == f.path &&
+          sel.staged == f.staged,
       tooltip: f.path,
-      onPress: () => widget.onPickFile(f),
+      onPress: () => widget.onPickFile(repo, f),
       onMenuAt: widget.menuFor == null
           ? null
           : (pos) => showRepoMenu(
-              context: context, position: pos, items: widget.menuFor!(f)),
+              context: context, position: pos, items: widget.menuFor!(repo, f)),
       check: _Check3(
         value: f.staged,
         tooltip: conflict ? '先解决冲突' : (f.staged ? '取消暂存' : '暂存'),
         onTap: _busy || conflict
             ? null
             : () => _run(() => f.staged
-                ? widget.git.unstage(f.path)
-                : widget.git.stage(f.path)),
+                ? widget.gitFor(repo.path).unstage(f.path)
+                : widget.gitFor(repo.path).stage(f.path)),
       ),
       // Discarding restores the worktree from the index, so it means nothing
       // on a staged row — only offered where it does something.
       trailing: !f.staged && !conflict && widget.onDiscard != null
-          ? _DiscardButton(onTap: () => widget.onDiscard!(f))
+          ? _DiscardButton(onTap: () => widget.onDiscard!(repo, f))
           : null,
       children: [
         StatusBadge(status: f.status),
@@ -569,7 +663,11 @@ class _CommitSheetState extends State<CommitSheet> {
         Row(
           children: [
             CheckLabel(
-              label: '修正提交',
+              // Amend only ever touches the active repo; say which when the
+              // tree holds others.
+              label: widget.groups.any((g) => g.repo.path != widget.active.path)
+                  ? '修正提交（仅 ${widget.active.name}）'
+                  : '修正提交',
               tooltip: '修补上一个提交而不新建提交',
               value: _amend,
               onChanged: _busy ? null : _toggleAmend,
@@ -1106,8 +1204,8 @@ class _BtnState extends State<_Btn> {
         onTap: widget.onTap,
         onTapUp: widget.onTapAt == null
             ? null
-            : (_) => widget.onTapAt!(
-                menuAnchorBelow(context, right: widget.joinLeft)),
+            : (_) => widget
+                .onTapAt!(menuAnchorBelow(context, right: widget.joinLeft)),
         onSecondaryTap: widget.onSecondaryTap,
         child: Opacity(
           opacity: enabled ? 1 : 0.45,

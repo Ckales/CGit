@@ -27,23 +27,51 @@ Widget _host(Widget child) => MaterialApp(
       ),
     );
 
+const _demo = RepoRef(path: '/tmp', name: 'demo', branch: 'dev');
+
 CommitSheet _sheet({List<FileStatus>? changes}) => CommitSheet(
-      changes: changes ??
-          const [
-            FileStatus(path: 'src/main.js', status: 'modified', staged: true),
-            FileStatus(
-                path: 'src/styles.css', status: 'modified', staged: false),
-          ],
-      git: Git('/tmp'),
-      repoName: 'demo',
-      branch: 'dev',
+      groups: [
+        (
+          repo: _demo,
+          changes: changes ??
+              const [
+                FileStatus(
+                    path: 'src/main.js', status: 'modified', staged: true),
+                FileStatus(
+                    path: 'src/styles.css', status: 'modified', staged: false),
+              ],
+        ),
+      ],
+      active: _demo,
       diffPane: const SizedBox(),
       onClose: () {},
       onChanged: () async {},
-      onPickFile: (_) {},
-      onCommitAndPush: () async {},
+      onPickFile: (_, __) {},
+      onCommitAndPush: (_) async {},
       onCreatePatch: ({required bool toClipboard}) async {},
     );
+
+/// A repo that records commits into a shared log, and can refuse them.
+class _FakeGit implements Git {
+  _FakeGit(this.repo, this.log, {this.commitError});
+
+  @override
+  final String repo;
+  final List<String> log;
+  final String? commitError;
+
+  @override
+  Future<String> commit(String message,
+      {bool amend = false, String? author, bool signoff = false}) async {
+    log.add('$repo:${amend ? 'amend' : 'commit'}:$message');
+    if (commitError != null) throw GitError(commitError!);
+    return '';
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation i) =>
+      throw UnsupportedError('${i.memberName} not needed here');
+}
 
 void main() {
   group('commit options', () {
@@ -189,5 +217,98 @@ void main() {
     // Not on screen until the arrow is used — a stray click on 提交 must never
     // reach the network.
     expect(find.text('提交并推送'), findsNothing);
+  });
+
+  group('workspace', () {
+    const api = RepoRef(path: '/w/api', name: 'api', branch: 'main');
+    const admin = RepoRef(path: '/w/admin', name: 'admin', branch: 'dev');
+    const front = RepoRef(path: '/w/front', name: 'front', branch: 'dev');
+    const staged = FileStatus(path: 'a.py', status: 'M', staged: true);
+    const unstaged = FileStatus(path: 'b.py', status: 'M', staged: false);
+
+    late List<String> log;
+    late List<String> pushed;
+    var closed = false;
+
+    Future<void> pump(WidgetTester tester, {String? adminError}) async {
+      log = [];
+      pushed = [];
+      closed = false;
+      final gits = {
+        api.path: _FakeGit(api.path, log),
+        admin.path: _FakeGit(admin.path, log, commitError: adminError),
+        front.path: _FakeGit(front.path, log),
+      };
+      await tester.pumpWidget(_host(CommitSheet(
+        groups: const [
+          (repo: admin, changes: [staged]),
+          (repo: front, changes: [staged, unstaged]),
+          (repo: api, changes: [unstaged]),
+        ],
+        // The active repo need not have changes of its own.
+        active: api,
+        gitFor: (path) => gits[path]!,
+        diffPane: const SizedBox(),
+        onClose: () => closed = true,
+        onChanged: () async {},
+        onPickFile: (_, __) {},
+        onCommitAndPush: (paths) async => pushed = paths,
+        onCreatePatch: ({required bool toClipboard}) async {},
+      )));
+    }
+
+    testWidgets('lists one tree per repo', (tester) async {
+      await pump(tester);
+      expect(find.text('admin  1 个文件'), findsOneWidget);
+      expect(find.text('front  2 个文件'), findsOneWidget);
+      expect(find.text('api  1 个文件'), findsOneWidget);
+    });
+
+    testWidgets('提交 commits every repo with something staged, and only those',
+        (tester) async {
+      await pump(tester);
+      await tester.enterText(_messageBox, 'feat: x');
+      await tester.tap(find.text('提交').last);
+      await tester.pumpAndSettle();
+
+      expect(log, ['/w/admin:commit:feat: x', '/w/front:commit:feat: x']);
+      expect(closed, isTrue);
+    });
+
+    testWidgets('提交并推送 pushes the repos it committed', (tester) async {
+      await pump(tester);
+      await tester.enterText(_messageBox, 'feat: y');
+      await tester.tap(find.byType(Chevron));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('提交并推送'));
+      await tester.pumpAndSettle();
+
+      expect(pushed, ['/w/admin', '/w/front']);
+    });
+
+    testWidgets('amend touches the active repo alone', (tester) async {
+      await pump(tester);
+      expect(find.text('修正提交（仅 api）'), findsOneWidget);
+      await tester.enterText(_messageBox, 'reword');
+      await tester.tap(find.text('修正提交（仅 api）'));
+      await tester.pump();
+      await tester.tap(find.text('修正提交').last);
+      await tester.pumpAndSettle();
+
+      expect(log, ['/w/api:amend:reword']);
+    });
+
+    testWidgets('a refusing repo does not stop the others; the dialog stays up',
+        (tester) async {
+      await pump(tester, adminError: 'pre-commit hook failed');
+      await tester.enterText(_messageBox, 'feat: z');
+      await tester.tap(find.text('提交').last);
+      await tester.pumpAndSettle();
+
+      expect(log, ['/w/admin:commit:feat: z', '/w/front:commit:feat: z']);
+      expect(closed, isFalse);
+      expect(find.textContaining('admin：pre-commit hook failed'), findsOneWidget);
+      expect(find.textContaining('已提交 1 个仓库'), findsOneWidget);
+    });
   });
 }

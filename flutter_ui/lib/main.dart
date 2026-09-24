@@ -6,7 +6,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'ai_settings.dart';
-import 'batch_commit_sheet.dart';
 import 'blame_view.dart';
 import 'branch_menu.dart';
 import 'clone_sheet.dart';
@@ -111,16 +110,36 @@ class NoDiff extends DiffTarget {
   const NoDiff();
 }
 
+/// A working-tree file. [repo] is its repo's path: the commit dialog lists
+/// every repo in the workspace, not only the active one.
 class WorkingFileDiff extends DiffTarget {
-  const WorkingFileDiff(this.path, this.staged);
+  const WorkingFileDiff(this.repo, this.path, this.staged);
+  final String repo;
   final String path;
   final bool staged;
+
+  @override
+  bool operator ==(Object other) =>
+      other is WorkingFileDiff &&
+      other.repo == repo &&
+      other.path == path &&
+      other.staged == staged;
+
+  @override
+  int get hashCode => Object.hash(repo, path, staged);
 }
 
 class CommitFileDiff extends DiffTarget {
   const CommitFileDiff(this.oid, this.path);
   final String oid;
   final String path;
+
+  @override
+  bool operator ==(Object other) =>
+      other is CommitFileDiff && other.oid == oid && other.path == path;
+
+  @override
+  int get hashCode => Object.hash(oid, path);
 }
 
 /// Per-line authorship rather than a diff. It shares the pane because it
@@ -200,12 +219,15 @@ class _RepoScreenState extends State<RepoScreen> {
   bool _commitDocked = false;
   bool _settingsOpen = false;
   bool _cloneOpen = false;
-  bool _batchCommitOpen = false;
 
   /// Sibling repositories found alongside the open one, for the workspace
   /// switcher. A single-repo folder leaves this at one entry and the switcher
   /// stays hidden.
   List<RepoRef> _workspaceRepos = const [];
+
+  /// Status of every workspace repo, by path — the Tauri `statusByRepo`. The
+  /// commit dialog lists these, and a non-empty one puts * in the 仓库 list.
+  Map<String, List<FileStatus>> _repoChanges = const {};
 
   /// Files still carrying conflict markers, and which multi-step operation the
   /// repo is in the middle of ("none" when it is not). They travel together:
@@ -260,9 +282,16 @@ class _RepoScreenState extends State<RepoScreen> {
   /// Coalesces a burst of file events into one refresh, and decides its depth.
   WatchDebounce? _watchDebounce;
 
+  /// Siblings are not watched, so their * is re-read when the window comes
+  /// back to the front — the usual moment after editing them elsewhere.
+  late final AppLifecycleListener _lifecycle;
+
   @override
   void initState() {
     super.initState();
+    _lifecycle = AppLifecycleListener(onResume: () {
+      if (_git != null) _refreshRepoChanges();
+    });
     _openRepo(widget.startPath);
     AiSettings.load().then((ai) {
       if (mounted) setState(() => _ai = ai);
@@ -294,6 +323,7 @@ class _RepoScreenState extends State<RepoScreen> {
 
   @override
   void dispose() {
+    _lifecycle.dispose();
     _watch?.cancel();
     _watchDebounce?.cancel();
     _historyScroll.dispose();
@@ -376,6 +406,59 @@ class _RepoScreenState extends State<RepoScreen> {
       _commitDocked = true;
       _commitOpen = false;
     });
+  }
+
+  /// Only the active repo is watched, so a sibling's status is as fresh as the
+  /// last refresh — the Tauri behaviour.
+  Future<void> _refreshRepoChanges() async {
+    final changes = await _readRepoChanges();
+    if (mounted) setState(() => _repoChanges = changes);
+  }
+
+  /// Every workspace repo's status, read live and in parallel. A repo that
+  /// fails to read is left out; opening it shows git's own error.
+  Future<Map<String, List<FileStatus>>> _readRepoChanges() async {
+    final changes = <String, List<FileStatus>>{};
+    await Future.wait([
+      for (final r in _workspaceRepos)
+        Git(r.path).status().then((files) {
+          changes[r.path] = files;
+        }, onError: (Object e) {
+          debugPrint('status of ${r.path} failed: $e');
+        }),
+    ]);
+    return changes;
+  }
+
+  /// One repo's changes. The active repo's is [_changes], which the watcher
+  /// keeps freshest; [_repoChanges] only moves on a full refresh.
+  List<FileStatus> _changesOf(String path) =>
+      path == _repoPath ? _changes : (_repoChanges[path] ?? const []);
+
+  /// What the commit sheet lists: docked, the active repo alone; as a dialog,
+  /// every repo with changes in sidebar order.
+  List<RepoChanges> _commitGroups() {
+    final docked = _commitDocked && !_commitOpen;
+    final groups = <RepoChanges>[];
+    for (final r in _workspaceRepos) {
+      if (docked && r.path != _repoPath) continue;
+      final changes = _changesOf(r.path);
+      if (changes.isEmpty) continue;
+      groups.add((repo: r, changes: changes));
+    }
+    return groups;
+  }
+
+  RepoRef get _activeRepo => _repoAt(_repoPath);
+
+  RepoRef _repoAt(String path) =>
+      _workspaceRepos.firstWhere((r) => r.path == path);
+
+  /// Make [path] the active repo unless it already is. For file actions whose
+  /// views (history list, blame) read through [_git].
+  Future<void> _activate(String path) async {
+    if (path == _repoPath) return;
+    await _setActiveRepo(_repoAt(path));
   }
 
   /// [_workspaceRepos] with one repo's branch badge replaced.
@@ -538,7 +621,7 @@ class _RepoScreenState extends State<RepoScreen> {
         _workspaceRepos = _withRepoBranch(_repoPath, _branch);
         _status = '就绪';
       });
-      await _reloadDiff();
+      await Future.wait([_reloadDiff(), _refreshRepoChanges()]);
     } on GitError catch (e) {
       if (mounted) setState(() => _status = e.message);
     }
@@ -568,8 +651,12 @@ class _RepoScreenState extends State<RepoScreen> {
   /// whatever list produced this diff.
   List<({String label, DiffTarget target})> get _navFiles => switch (_target) {
         WorkingFileDiff() => [
-            for (final f in _changes)
-              (label: f.path, target: WorkingFileDiff(f.path, f.staged)),
+            for (final g in _commitGroups())
+              for (final f in g.changes)
+                (
+                  label: f.path,
+                  target: WorkingFileDiff(g.repo.path, f.path, f.staged),
+                ),
           ],
         CommitFileDiff(:final oid) => [
             for (final f in _commitFiles)
@@ -578,15 +665,7 @@ class _RepoScreenState extends State<RepoScreen> {
         _ => const [],
       };
 
-  int get _navIndex {
-    final path = switch (_target) {
-      WorkingFileDiff(:final path) => path,
-      CommitFileDiff(:final path) => path,
-      _ => null,
-    };
-    if (path == null) return -1;
-    return _navFiles.indexWhere((f) => f.label == path);
-  }
+  int get _navIndex => _navFiles.indexWhere((f) => f.target == _target);
 
   /// Step to the previous (-1) or next (+1) change, continuing into the
   /// adjacent file once this one runs out — the behaviour of IDEA's ↑/↓.
@@ -641,7 +720,10 @@ class _RepoScreenState extends State<RepoScreen> {
   }
 
   Future<void> _reloadDiff() async {
-    final git = _git;
+    final git = switch (_target) {
+      WorkingFileDiff(:final repo) => Git(repo),
+      _ => _git,
+    };
     if (git == null) return;
     try {
       final hunks = switch (_target) {
@@ -907,25 +989,37 @@ class _RepoScreenState extends State<RepoScreen> {
   }
 
   /// The Tauri fileMenuItems: the past-commit menu plus 丢弃改动.
-  List<MenuAction> _fileMenu(FileStatus f) => [
-        ..._commitFileMenu(f.path),
-        MenuAction('丢弃改动', () => _discardFile(f), danger: true),
+  List<MenuAction> _fileMenu(RepoRef repo, FileStatus f) => [
+        ..._commitFileMenu(f.path, repo: repo.path),
+        MenuAction('丢弃改动', () => _discardFile(repo, f), danger: true),
       ];
 
   /// A file in a past commit — the Tauri fileMenuItems without 丢弃改动, which
   /// has nothing to discard there. Editor, history and blame all act on the
   /// working-tree copy.
-  List<MenuAction> _commitFileMenu(String path) => [
-        MenuAction('从项目打开', () => _openProjectAtFile(path)),
-        MenuAction('编辑文件', () => _openFile(path)),
-        MenuAction('复制文件路径', () async {
-          final full = '$_repoPath/$path';
-          await _git!.copyToClipboard(full);
-          if (mounted) setState(() => _status = '已复制 $full');
-        }),
-        MenuAction('文件历史', () => _showFileHistory(path)),
-        MenuAction('逐行归属 (blame)', () => _showBlame(path)),
-      ];
+  /// [repo] is the file's repo when it is not the active one — the commit
+  /// dialog lists them all. History and blame show in views that read through
+  /// [_git], so those switch to it first.
+  List<MenuAction> _commitFileMenu(String path, {String? repo}) {
+    final root = repo ?? _repoPath;
+    return [
+      MenuAction('从项目打开', () => _openProjectAtFile(path, Git(root))),
+      MenuAction('编辑文件', () => _openFile(path, Git(root))),
+      MenuAction('复制文件路径', () async {
+        final full = '$root/$path';
+        await Git(root).copyToClipboard(full);
+        if (mounted) setState(() => _status = '已复制 $full');
+      }),
+      MenuAction('文件历史', () async {
+        await _activate(root);
+        await _showFileHistory(path);
+      }),
+      MenuAction('逐行归属 (blame)', () async {
+        await _activate(root);
+        await _showBlame(path);
+      }),
+    ];
+  }
 
   /// The diff shown belonged to the dialog; left open it would drop into the
   /// main window on its own — the Tauri closeCommitDialog rule.
@@ -933,18 +1027,19 @@ class _RepoScreenState extends State<RepoScreen> {
   /// last refresh — the Tauri openCommitDialog rule. A clean repo would open a
   /// dialog with an empty list and a dead 提交 button.
   Future<void> _openCommitDialog() async {
-    final git = _git;
-    if (git == null) return;
-    try {
-      if ((await git.status()).isEmpty) {
-        await _notify('当前没有可提交内容');
-        return;
-      }
-    } on GitError catch (e) {
-      if (mounted) setState(() => _status = e.message);
+    if (_git == null) return;
+    // The dialog spans the workspace, so any repo with changes is enough.
+    final changes = await _readRepoChanges();
+    if (!mounted) return;
+    setState(() => _repoChanges = changes);
+    var any = false;
+    for (final files in changes.values) {
+      if (files.isNotEmpty) any = true;
+    }
+    if (!any) {
+      await _notify('当前没有可提交内容');
       return;
     }
-    if (!mounted) return;
     setState(() {
       _commitDocked = false;
       _commitOpen = true;
@@ -958,7 +1053,7 @@ class _RepoScreenState extends State<RepoScreen> {
         _paneBack = null;
       });
 
-  Future<void> _discardFile(FileStatus f) async {
+  Future<void> _discardFile(RepoRef repo, FileStatus f) async {
     if (!await _confirm(
       title: '丢弃改动',
       body: '丢弃「${f.path}」的改动？未提交的内容无法找回。',
@@ -966,23 +1061,23 @@ class _RepoScreenState extends State<RepoScreen> {
       return;
     }
     await _stashAction('丢弃 ${f.path} 的改动', () async {
-      await _git!.discard(f.path);
+      await Git(repo.path).discard(f.path);
       return '';
     });
   }
 
-  Future<void> _openFile(String file) async {
+  Future<void> _openFile(String file, Git git) async {
     try {
-      await _git!.openInEditor(file, editor: widget.prefs.editor);
+      await git.openInEditor(file, editor: widget.prefs.editor);
     } on GitError catch (e) {
       if (mounted) setState(() => _status = e.message);
     }
   }
 
   /// The toolbar's 打开项目 plus the file — same project and same editor.
-  Future<void> _openProjectAtFile(String file) async {
+  Future<void> _openProjectAtFile(String file, Git git) async {
     try {
-      await _git!.openProjectWithFile(
+      await git.openProjectWithFile(
         file,
         project: _workspaceRoot,
         editor: _projectEditor,
@@ -1102,10 +1197,10 @@ class _RepoScreenState extends State<RepoScreen> {
     }
   }
 
-  Future<void> _showFile(FileStatus file) async {
+  Future<void> _showFile(RepoRef repo, FileStatus file) async {
     setState(() {
       _paneBack = null;
-      _target = WorkingFileDiff(file.path, file.staged);
+      _target = WorkingFileDiff(repo.path, file.path, file.staged);
     });
     await _reloadDiff();
   }
@@ -1209,16 +1304,31 @@ class _RepoScreenState extends State<RepoScreen> {
 
   Future<void> _pull() => _network('拉取', () => _git!.pull());
 
-  Future<void> _push() => _network(
-        '推送',
-        () => pushWithRetry(
-          _git!,
-          chooseStrategy: _askUpdateStrategy,
-          onProgress: (m) {
-            if (mounted) setState(() => _status = m);
-          },
-        ),
-      );
+  Future<void> _push() => _pushRepos([_repoPath]);
+
+  /// Push each repo in turn after a commit that reached several. One refusing
+  /// does not stop the rest; the failures come back together.
+  Future<void> _pushRepos(List<String> paths) => _network('推送', () async {
+        var last = '';
+        final failures = <String>[];
+        for (final path in paths) {
+          try {
+            last = await pushWithRetry(
+              Git(path),
+              chooseStrategy: _askUpdateStrategy,
+              onProgress: (m) {
+                if (mounted) setState(() => _status = m);
+              },
+            );
+          } on GitError catch (e) {
+            failures.add(paths.length > 1
+                ? '${_repoAt(path).name}：${e.message}'
+                : e.message);
+          }
+        }
+        if (failures.isNotEmpty) throw GitError(failures.join('；'));
+        return last;
+      });
 
   /// Right-click on 推送. `--force-with-lease`, so it still refuses to clobber
   /// commits this repo has never seen — but it rewrites the remote branch, so
@@ -1392,8 +1502,9 @@ class _RepoScreenState extends State<RepoScreen> {
   }
 
   Future<void> _applyPartial(String patch, bool reverse) async {
-    final git = _git;
-    if (git == null) return;
+    final target = _target;
+    if (target is! WorkingFileDiff) return;
+    final git = Git(target.repo);
     try {
       await git.applyHunk(patch, reverse: reverse);
       setState(() => _status = reverse ? '已取消暂存所选行' : '已暂存所选行');
@@ -1449,8 +1560,6 @@ class _RepoScreenState extends State<RepoScreen> {
           // whatever happens to be listed first.
           if (_cloneOpen) {
             setState(() => _cloneOpen = false);
-          } else if (_batchCommitOpen) {
-            setState(() => _batchCommitOpen = false);
           } else if (_settingsOpen) {
             setState(() => _settingsOpen = false);
           } else if (_rebasePlan != null) {
@@ -1507,19 +1616,6 @@ class _RepoScreenState extends State<RepoScreen> {
                     onCloned: (path) {
                       setState(() => _cloneOpen = false);
                       _openRepo(path);
-                    },
-                  ),
-                if (_batchCommitOpen)
-                  BatchCommitSheet(
-                    repos: _workspaceRepos,
-                    onClose: () => setState(() => _batchCommitOpen = false),
-                    onChanged: _refresh,
-                    onDone: (summary) {
-                      setState(() {
-                        _batchCommitOpen = false;
-                        _status = summary;
-                      });
-                      _refresh();
                     },
                   ),
                 if (_rebasePlan != null)
@@ -1756,12 +1852,7 @@ class _RepoScreenState extends State<RepoScreen> {
           // Only with siblings: a 仓库 list holding one entry is a heading that
           // tells you nothing, which is why the Tauri sidebar hides it too.
           if (_workspaceRepos.length > 1) ...[
-            _SectionHead(
-              label: '仓库',
-              palette: p,
-              action: _SectionAction('☑', '批量提交',
-                  () => setState(() => _batchCommitOpen = true)),
-            ),
+            _SectionHead(label: '仓库', palette: p),
             for (final r in _workspaceRepos)
               // Not a ContextMenuRegion: the menu lists the repo's branches,
               // which have to be read before it can open.
@@ -1774,6 +1865,7 @@ class _RepoScreenState extends State<RepoScreen> {
                   badge: r.branch.isEmpty ? null : r.branch,
                   palette: p,
                   bold: r.path == _repoPath,
+                  dirty: _changesOf(r.path).isNotEmpty,
                   tooltip: '${r.path}\n右键切换分支',
                   onTap: () => _openRepoCommit(r),
                 ),
@@ -1794,6 +1886,7 @@ class _RepoScreenState extends State<RepoScreen> {
                 palette: p,
                 active: b.isCurrent,
                 leading: b.isCurrent ? '●' : null,
+                dirty: b.isCurrent && _changes.isNotEmpty,
                 // Left click checks out, like the Tauri version; the menu holds
                 // everything else.
                 onTap: b.isCurrent
@@ -1914,13 +2007,12 @@ class _RepoScreenState extends State<RepoScreen> {
   }
 
   Widget _commitSheet(Palette p, {bool docked = false}) => CommitSheet(
-        changes: _changes,
-        git: _git!,
-        repoName: _repoName,
-        branch: _branch,
+        groups: _commitGroups(),
+        active: _activeRepo,
         diffPane: _diffPane(p),
         selected: switch (_target) {
-          WorkingFileDiff(:final path, :final staged) => (
+          WorkingFileDiff(:final repo, :final path, :final staged) => (
+              repo: repo,
               path: path,
               staged: staged
             ),
@@ -1931,7 +2023,7 @@ class _RepoScreenState extends State<RepoScreen> {
         onClose: _closeCommit,
         onChanged: _refresh,
         onPickFile: _showFile,
-        onCommitAndPush: _push,
+        onCommitAndPush: _pushRepos,
         onCreatePatch: _createWorkingPatch,
         ai: _ai,
         docked: docked,
@@ -2053,8 +2145,9 @@ class _RepoScreenState extends State<RepoScreen> {
   Widget _diffPane(Palette p) {
     final title = switch (_target) {
       NoDiff() => '差异',
-      WorkingFileDiff(:final path, :final staged) =>
-        '$path${staged ? '（已暂存）' : ''}',
+      WorkingFileDiff(:final repo, :final path, :final staged) =>
+        '${_workspaceRepos.length > 1 ? '${_repoAt(repo).name} / ' : ''}'
+            '$path${staged ? '（已暂存）' : ''}',
       CommitFileDiff(:final path) => path,
       BlameTarget(:final path) => '逐行归属 — $path',
     };
@@ -2817,9 +2910,13 @@ class _SidebarRow extends StatefulWidget {
     this.icon,
     this.badge,
     this.bold = false,
+    this.dirty = false,
   });
 
   final String label;
+
+  /// A yellow * after the label: the repo has uncommitted changes.
+  final bool dirty;
 
   /// Small bordered tag after the label — the repo list's branch name.
   final String? badge;
@@ -2904,6 +3001,16 @@ class _SidebarRowState extends State<_SidebarRow> {
                   ),
                 ),
               ),
+              if (widget.dirty)
+                Tooltip(
+                  message: '有未提交的改动',
+                  child: Padding(
+                    padding: const EdgeInsets.only(left: 4),
+                    child: Text('*',
+                        style: ui.copyWith(
+                            color: p.yellow, fontWeight: FontWeight.w700)),
+                  ),
+                ),
               if (widget.badge != null) ...[
                 const SizedBox(width: 6),
                 Flexible(

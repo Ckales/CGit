@@ -26,8 +26,7 @@ export 'src/rust/api/git.dart'
         Tracking,
         Workspace;
 
-/* The live data layer: every call crosses into cgit-core, the same crate the
-   Tauri app calls. There is no second implementation of any Git rule here —
+/* The live data layer: every call crosses into cgit-core. There is no second implementation of any Git rule here —
    this file only binds the repo path so call sites do not repeat it, and
    converts the one type that does not cross the FFI seam cleanly. */
 
@@ -88,7 +87,7 @@ class Git {
   Future<List<FileStatus>> status() => _guard(() => rust.getStatus(path: repo));
 
   /// `limit` is `usize` in core, which frb maps to BigInt. Converting here keeps
-  /// that out of the UI rather than changing core's signature for both frontends.
+  /// that out of the UI rather than changing core's signature.
   Future<List<GraphCommit>> graph({int limit = 200}) =>
       _guard(() => rust.getGraph(path: repo, limit: BigInt.from(limit)));
 
@@ -99,7 +98,7 @@ class Git {
       _guard(() => rust.getCommitFiles(path: repo, oid: oid));
 
   /// A commit's diff arrives as one patch string; the caller splits it into
-  /// hunks with splitPatchText, exactly as the Tauri frontend does.
+  /// hunks with splitPatchText.
   Future<String> commitDiff(String oid, String file) =>
       _guard(() => rust.getCommitDiff(path: repo, oid: oid, file: file));
 
@@ -395,16 +394,14 @@ class Git {
   Future<String> commitPatch(String oid) =>
       _guard(() => rust.createCommitPatch(path: repo, oid: oid));
 
-  /// Goes through core rather than Flutter's own Clipboard so both frontends
-  /// put text on the pasteboard the same way.
+  /// Goes through core rather than Flutter's own Clipboard.
   Future<void> copyToClipboard(String text) =>
       _guard(() => rust.writeClipboard(text: text));
 
   Future<String> deleteTag(String name) =>
       _guard(() => rust.deleteTag(path: repo, name: name));
 
-  /// Write a patch to disk. Core does the writing so the Tauri app and this one
-  /// produce byte-identical files.
+  /// Write a patch to disk. Core does the writing.
   Future<void> savePatch(String file, String content) =>
       _guard(() => rust.savePatch(file: file, content: content));
 

@@ -38,7 +38,7 @@ class MenuAction {
   final bool checked;
 
   /// The thing already open (the current project): tinted accent, still
-  /// clickable. Same as the Tauri `.context-item.current`.
+  /// clickable.
   final bool current;
 
   /// A second, dimmer line under the label — the path under a project name.
@@ -61,14 +61,14 @@ Offset menuAnchorBelow(BuildContext context, {bool right = false}) {
 
 /// Show a context menu at a global position.
 ///
-/// The DOM version hand-writes the placement, the screen-edge clamping and the
-/// dismiss-on-outside-click; Flutter's own `showMenu` already does all three.
-/// The rows are our own entries rather than `PopupMenuItem`, whose Material
-/// ink hover can't be restyled into the Tauri accent highlight.
+/// Flutter's own `showMenu` does the placement, the screen-edge clamping and
+/// the dismiss-on-outside-click. The rows are our own entries rather than
+/// `PopupMenuItem`, whose Material ink hover can't be restyled into the accent
+/// highlight.
 ///
-/// ponytail: flat menus only. The Tauri UI nests submenus in a dozen places,
-/// and Flutter has no equivalent of the "keep the submenu open while the mouse
-/// crosses to it" timer that makes those usable — worth building when the first
+/// ponytail: flat menus only. Flutter has no equivalent of the "keep the
+/// submenu open while the mouse crosses to it" timer that makes submenus
+/// usable — worth building when the first
 /// feature actually needs one, not before.
 Future<void> showRepoMenu({
   required BuildContext context,

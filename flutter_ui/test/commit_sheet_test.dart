@@ -168,8 +168,7 @@ void main() {
     expect(find.text('修复提交弹窗缺少输入框'), findsOneWidget);
   });
 
-  testWidgets('changes show as a tree under the repo, like the Tauri dialog',
-      (tester) async {
+  testWidgets('changes show as a tree under the repo', (tester) async {
     await tester.pumpWidget(_host(_sheet()));
 
     expect(find.text('demo  2 个文件'), findsOneWidget);

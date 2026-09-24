@@ -173,8 +173,8 @@ pub fn open_workspace(path: String) -> Result<Workspace, String> {
 
 /// Watch the repo root recursively and report debounced changes to `on_change`,
 /// which receives "refs" when the burst moved HEAD or a ref and "worktree"
-/// otherwise. The frontend decides what that means: the Tauri app emits it as a
-/// `repo-changed` event, the Flutter app pushes it into a stream.
+/// otherwise. The caller decides what that means; the Flutter app pushes it into
+/// a stream.
 pub fn start_watching(
     state: &WatchState,
     path: &str,
@@ -1758,10 +1758,7 @@ pub fn create_commit_patch(path: String, oid: String) -> Result<String, String> 
     run_git(&path, &["format-patch", "-1", "--stdout", "--binary", &oid])
 }
 
-/// 往系统剪贴板写。和 `read_clipboard` 一样绕开 webview：WKWebView 里
-/// `navigator.clipboard.writeText` 抛 NotAllowedError、`execCommand("copy")` 返回 false，
-/// 即便 `userActivation.isActive` 仍是 true —— 只要中间隔了一次 await（比如先 invoke
-/// 去取补丁内容），WebKit 就不再认那个手势。pbcopy 没有这些限制。
+/// 往系统剪贴板写，走 `pbcopy`。
 pub fn write_clipboard(text: String) -> Result<(), String> {
     use std::io::Write;
     use std::process::Stdio;
@@ -1807,8 +1804,7 @@ pub fn apply_patch(path: String, patch: String) -> Result<(), String> {
     run_git_stdin(&path, &["apply"], &patch).map(|_| ())
 }
 
-/// 系统剪贴板内容。走 `pbpaste` 而不是 webview 的 navigator.clipboard：
-/// 后者在 WKWebView 里读剪贴板要用户手势加权限，pbpaste 没这些限制。
+/// 系统剪贴板内容，走 `pbpaste`。
 pub fn read_clipboard() -> Result<String, String> {
     let out = Command::new("pbpaste")
         .output()
@@ -2192,10 +2188,7 @@ pub fn set_identity(path: String, name: String, email: String, global: bool) -> 
 /// One non-streaming round against an OpenAI-compatible /chat/completions
 /// endpoint, returning the assistant message.
 ///
-/// The request is made here rather than with `fetch` in the webview: a browser
-/// request needs the endpoint to answer CORS preflights (relay services often
-/// answer OPTIONS with 404) and the packaged app's `tauri://` origin refuses
-/// plain `http://` targets as mixed content. curl has neither restriction.
+/// The request goes through curl.
 
 pub fn ai_chat(
     url: String,

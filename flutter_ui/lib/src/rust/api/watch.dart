@@ -9,7 +9,7 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 // These functions are ignored because they are not marked as `pub`: `watch_state`
 
-/// Open a workspace. Unlike the Tauri command this does not start watching —
+/// Open a workspace. This does not start watching —
 /// core keeps the two apart, and Dart calls [`watch_repo`] with the resolved
 /// root when it wants change notifications.
 Future<Workspace> openWorkspace({required String path}) =>

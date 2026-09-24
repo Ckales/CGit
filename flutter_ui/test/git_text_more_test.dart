@@ -3,9 +3,9 @@ import 'dart:convert';
 import 'package:cgit_flutter/git_text.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-/// The second half of the src/git-text.js port: conflict parsing, change
-/// navigation, the AI endpoint, push/auth failure classification and the push
-/// dialog's folder tree. Ported case for case from test/git-text.test.js.
+/// The rest of git_text.dart: conflict parsing, change navigation, the AI
+/// endpoint, push/auth failure classification and the push dialog's folder
+/// tree.
 const conflicted = 'top\n'
     '<<<<<<< HEAD\n'
     'mine\n'

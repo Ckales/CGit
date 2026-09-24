@@ -1,8 +1,7 @@
 import 'package:flutter/widgets.dart';
 
-/// The palette from src/styles.css, transcribed. CSS custom properties cascade
-/// and re-theme the whole tree on one attribute flip; here the values are
-/// plain constants and the swap is an InheritedWidget rebuild.
+/// The app palette. The values are plain constants and switching theme is an
+/// InheritedWidget rebuild.
 class Palette {
   const Palette({
     required this.bg,
@@ -55,8 +54,7 @@ class Palette {
     bgSel: Color(0xFFD3E2FF),
   );
 
-  // Row tints. In CSS these are rgba() over the pane background; Flutter has
-  // Color.withValues for the same thing, so the numbers carry over 1:1.
+  // Row tints: translucent colour over the pane background.
   Color get delRow => red.withValues(alpha: 0.12);
   Color get addRow => green.withValues(alpha: 0.14);
   Color get intraDel => red.withValues(alpha: 0.42);
@@ -75,8 +73,7 @@ class Theming extends InheritedWidget {
   bool updateShouldNotify(Theming old) => old.palette != palette;
 }
 
-/// The one monospace style the diff is built from. `height: 1.4` matches the
-/// line-height the CSS diff pane uses.
+/// The one monospace style the diff is built from.
 const mono = TextStyle(
   fontFamily: 'Menlo',
   fontFamilyFallback: ['SF Mono', 'monospace'],
@@ -93,7 +90,7 @@ const ui = TextStyle(
 
 /// The ⌄ used by every dropdown and menu button in this app.
 ///
-/// Painted as the same stroke the Tauri app's select uses (a 10×6 viewBox,
+/// Painted as a stroke (a 10×6 viewBox,
 /// `M1 1.25 5 4.75 9 1.25`, 1.4 wide). Not `Icons.arrow_drop_down`:
 /// `pubspec.yaml` keeps `uses-material-design: false`, so that renders as a
 /// missing-glyph box. Not the text '▾' either: it is tiny in the system font.

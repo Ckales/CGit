@@ -1,7 +1,6 @@
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// The default system prompt, verbatim from the Tauri app so both frontends
-/// produce the same kind of message from the same diff.
+/// The default system prompt.
 const defaultAiPrompt = '''你是一个 Git 提交说明生成器。根据用户给出的 git diff 生成一条提交说明。
 要求：
 1. 第一行是不超过 50 个字的概要，使用中文，不要加句号。
@@ -9,8 +8,7 @@ const defaultAiPrompt = '''你是一个 Git 提交说明生成器。根据用户
 3. 只描述改动本身，不要解释 diff 语法，不要输出代码块标记。
 4. 直接输出提交说明正文，不要任何前缀或额外说明。''';
 
-/// AI settings, all in shared_preferences — the token included, matching the
-/// Tauri app's localStorage boundary (AGENTS.md).
+/// AI settings, all in shared_preferences — the token included (AGENTS.md).
 ///
 /// The token used to live in the login Keychain. This app is ad-hoc signed, so
 /// every rebuild changes its signature and "始终允许" stops matching: macOS asked

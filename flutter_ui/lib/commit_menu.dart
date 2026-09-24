@@ -19,8 +19,8 @@ enum CommitCommand {
 /// in how much they throw away, and burying that behind a hover makes the
 /// dangerous one easier to reach by accident, not harder.
 ///
-/// The Tauri menu nests "创建补丁" over a file/clipboard pair. Flattened here:
-/// the choice is binary, so a submenu costs a hover and buys nothing — and
+/// "创建补丁" is a flat file/clipboard pair rather than a submenu: the choice is
+/// binary, so a submenu costs a hover and buys nothing — and
 /// Flutter has no equivalent of the timer that keeps a submenu open while the
 /// pointer crosses to it.
 List<MenuAction> commitMenu({

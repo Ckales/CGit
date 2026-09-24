@@ -8,8 +8,7 @@ import 'theme.dart';
 /// Clone a repository, showing git's own progress as it arrives.
 ///
 /// This is the one screen driven by a stream rather than a future: core reports
-/// progress through a StreamSink, which is what the Tauri frontend receives as
-/// `clone-progress` events. The last value is the path of the created worktree.
+/// progress through a StreamSink. The last value is the path of the created worktree.
 class CloneSheet extends StatefulWidget {
   const CloneSheet({
     super.key,

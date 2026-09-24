@@ -72,8 +72,7 @@ class _CGitAppState extends State<CGitApp> {
       debugShowCheckedModeBanner: false,
       home: Builder(
         builder: (context) => MediaQuery(
-          // The Tauri app sets one root `font-size` and lets every rem follow.
-          // A text scale is the same single knob here — the alternative is
+          // One text scale is the single font-size knob — the alternative is
           // threading a size through a few hundred call sites.
           data: MediaQuery.of(context).copyWith(
             textScaler: TextScaler.linear(_fontSize / Prefs.baseFontSize),
@@ -101,9 +100,8 @@ class _CGitAppState extends State<CGitApp> {
   }
 }
 
-/// What the diff pane is currently showing. The DOM version keeps this in a
-/// handful of module-level `let`s and a `diff-back-btn` that knows how to undo
-/// the last transition; one sealed type is the same thing with the states named.
+/// What the diff pane is currently showing, as one sealed type with the states
+/// named.
 sealed class DiffTarget {
   const DiffTarget();
 }
@@ -219,8 +217,8 @@ class _RepoScreenState extends State<RepoScreen> {
   DiffTarget _target = const NoDiff();
 
   /// One entry per run of changed lines in the open diff, "hunkIndex:rowIndex",
-  /// in the order they appear. This is what ↑/↓ step through — IDEA steps by
-  /// block, not by line, and so does the Tauri version.
+  /// in the order they appear. This is what ↑/↓ step through — by block, not by
+  /// line, as IDEA does.
   List<String> _blocks = const [];
   final _blockKeys = <String, GlobalKey>{};
   int _blockIndex = -1;
@@ -251,7 +249,7 @@ class _RepoScreenState extends State<RepoScreen> {
   /// stays hidden.
   List<RepoRef> _workspaceRepos = const [];
 
-  /// Status of every workspace repo, by path — the Tauri `statusByRepo`. The
+  /// Status of every workspace repo, by path. The
   /// commit dialog lists these, and a non-empty one puts * in the 仓库 list.
   Map<String, List<FileStatus>> _repoChanges = const {};
 
@@ -395,7 +393,7 @@ class _RepoScreenState extends State<RepoScreen> {
       _workspaceRoot = workspace.root;
       _workspaceRepos = workspace.repos;
     });
-    // The root, like the Tauri addRecent: a member path reopens as a lone repo.
+    // The root, not the member: a member path reopens as a lone repo.
     await widget.prefs.rememberRepo(workspace.root);
     await _setActiveRepo(repo);
   }
@@ -420,7 +418,7 @@ class _RepoScreenState extends State<RepoScreen> {
     await _refresh();
   }
 
-  /// A click in the sidebar's 仓库 list, as the Tauri openRepoCommit: switch to
+  /// A click in the sidebar's 仓库 list: switch to
   /// the repo, and dock its commit panel only when it has something to commit.
   Future<void> _openRepoCommit(RepoRef repo) async {
     await _setActiveRepo(repo);
@@ -436,7 +434,7 @@ class _RepoScreenState extends State<RepoScreen> {
   }
 
   /// Only the active repo is watched, so a sibling's status is as fresh as the
-  /// last refresh — the Tauri behaviour.
+  /// last refresh.
   Future<void> _refreshRepoChanges() async {
     final changes = await _readRepoChanges();
     if (mounted) setState(() => _repoChanges = changes);
@@ -496,7 +494,7 @@ class _RepoScreenState extends State<RepoScreen> {
               : r,
       ];
 
-  /// Right-click on a 仓库 row, as the Tauri showRepoBranchMenu: that repo's
+  /// Right-click on a 仓库 row: that repo's
   /// local and remote branches, a click checks one out there. The selected
   /// repo stays as it is.
   Future<void> _showRepoBranchMenu(RepoRef repo, Offset position) async {
@@ -610,9 +608,8 @@ class _RepoScreenState extends State<RepoScreen> {
     }
   }
 
-  /// One reload for everything the window shows. The DOM version splits this
-  /// into refreshStatus / refreshBranches / refreshGraph because it repaints
-  /// each list independently; here a rebuild is cheap enough not to bother.
+  /// One reload for everything the window shows; a rebuild is cheap enough not
+  /// to split it per list.
   Future<void> _refresh() async {
     final git = _git;
     if (git == null) return;
@@ -1015,13 +1012,13 @@ class _RepoScreenState extends State<RepoScreen> {
     );
   }
 
-  /// The Tauri fileMenuItems: the past-commit menu plus 丢弃改动.
+  /// A working-tree file: the past-commit menu plus 丢弃改动.
   List<MenuAction> _fileMenu(RepoRef repo, FileStatus f) => [
         ..._commitFileMenu(f.path, repo: repo.path),
         MenuAction('丢弃改动', () => _discardFile(repo, f), danger: true),
       ];
 
-  /// A file in a past commit — the Tauri fileMenuItems without 丢弃改动, which
+  /// A file in a past commit — the same menu without 丢弃改动, which
   /// has nothing to discard there. Editor, history and blame all act on the
   /// working-tree copy.
   /// [repo] is the file's repo when it is not the active one — the commit
@@ -1049,9 +1046,9 @@ class _RepoScreenState extends State<RepoScreen> {
   }
 
   /// The diff shown belonged to the dialog; left open it would drop into the
-  /// main window on its own — the Tauri closeCommitDialog rule.
+  /// main window on its own.
   /// Asked live rather than read off [_changes], which is only as fresh as the
-  /// last refresh — the Tauri openCommitDialog rule. A clean repo would open a
+  /// last refresh. A clean repo would open a
   /// dialog with an empty list and a dead 提交 button.
   Future<void> _openCommitDialog() async {
     if (_git == null) return;
@@ -1506,7 +1503,7 @@ class _RepoScreenState extends State<RepoScreen> {
   }
 
   /// A request that did not happen: status bar plus a box that stays until
-  /// dismissed, as the Tauri notify.
+  /// dismissed.
   Future<void> _notify(String message) {
     setState(() => _status = message);
     return showNotice(context, message);
@@ -1550,12 +1547,8 @@ class _RepoScreenState extends State<RepoScreen> {
     final p = Theming.of(context);
 
     return CallbackShortcuts(
-      // Mirrors the Tauri shortcuts.
-      //
-      // That version suppresses most of these while the user is typing, because
-      // in a browser ⌘S / ⌘P / ⌘O carry the *browser's* meaning and its handler
-      // is global. Neither is true here: a Flutter TextField gives these keys no
-      // behaviour of its own, so there is nothing to yield to and no reason to
+      // These stay live while the user is typing: a Flutter TextField gives
+      // these keys no behaviour of its own, so there is nothing to yield to and no reason to
       // track focus. ⌘↵ inside the commit box commits, which is what it should
       // do there anyway.
       bindings: {
@@ -1686,7 +1679,7 @@ class _RepoScreenState extends State<RepoScreen> {
   Widget _toolbar(Palette p) {
     final multi = _workspaceRepos.length > 1;
     // Left: where you are. Centre pill: which project, and the way to switch.
-    // Right: the actions. Same split as the Tauri toolbar — 打开…/克隆… live in
+    // Right: the actions. 打开…/克隆… live in
     // the pill menu and 主题/差异视图 in 设置 → 外观, so neither is a button here.
     final where = _git == null
         ? '未打开仓库'
@@ -1701,7 +1694,7 @@ class _RepoScreenState extends State<RepoScreen> {
         color: p.bgAlt,
         border: Border(bottom: BorderSide(color: p.border)),
       ),
-      // Same layout as the Tauri toolbar: the pill is centred on the window,
+      // The pill is centred on the window,
       // not placed in the row, so the buttons stay flush right. The path stops
       // 200px short of centre (half the pill's cap plus a gap) so a long one
       // never slides under it.
@@ -1801,7 +1794,7 @@ class _RepoScreenState extends State<RepoScreen> {
     return parts.isEmpty ? path : parts.last;
   }
 
-  /// `~` for the home directory, the way the Tauri recent list prints paths.
+  /// `~` for the home directory, the way the recent list prints paths.
   String _prettyPath(String path) {
     final home = Platform.environment['HOME'] ?? '';
     return home.isNotEmpty && path.startsWith('$home/')
@@ -1881,7 +1874,7 @@ class _RepoScreenState extends State<RepoScreen> {
         padding: const EdgeInsets.symmetric(vertical: 6),
         children: [
           // Only with siblings: a 仓库 list holding one entry is a heading that
-          // tells you nothing, which is why the Tauri sidebar hides it too.
+          // tells you nothing.
           if (_workspaceRepos.length > 1) ...[
             _SectionHead(label: '仓库', palette: p),
             for (final r in _workspaceRepos)
@@ -1918,7 +1911,7 @@ class _RepoScreenState extends State<RepoScreen> {
                 active: b.isCurrent,
                 leading: b.isCurrent ? '●' : null,
                 dirty: b.isCurrent && _changes.isNotEmpty,
-                // Left click checks out, like the Tauri version; the menu holds
+                // Left click checks out; the menu holds
                 // everything else.
                 onTap: b.isCurrent
                     ? null
@@ -2062,7 +2055,7 @@ class _RepoScreenState extends State<RepoScreen> {
       );
 
   Widget _mainRight(Palette p) {
-    // The Tauri data-diff-open rule: nothing selected means no lower half at
+    // Nothing selected means no lower half at
     // all, and the history takes the window. The dialog, when open, holds the
     // diff pane, so the main window has nothing to show below either.
     final docked = _commitDocked && !_commitOpen;
@@ -2090,7 +2083,7 @@ class _RepoScreenState extends State<RepoScreen> {
           SizedBox(height: _historyHeight, child: history)
         else
           Expanded(child: history),
-        // Between history and diff, where the Tauri version puts it: the user
+        // Between history and diff: the user
         // sees it right after the operation that stopped.
         if (_conflicts.isNotEmpty || _op != 'none') _conflictBanner(p),
         if (lowerOpen) ...[
@@ -2105,7 +2098,7 @@ class _RepoScreenState extends State<RepoScreen> {
               widget.prefs.setHistoryHeight(260);
             },
           ),
-          // One diff pane, one place, as the Tauri app moves the element:
+          // One diff pane, one place:
           // building it twice would mount its block GlobalKeys twice.
           Expanded(
               child: docked ? _commitSheet(p, docked: true) : _diffPane(p)),
@@ -2286,7 +2279,7 @@ class _RepoScreenState extends State<RepoScreen> {
     );
   }
 
-  /// Same as the Tauri pane head: a bold 历史 and two search boxes sharing
+  /// A bold 历史 and two search boxes sharing
   /// the width, filled rather than outlined.
   Widget _historyHead(Palette p) => Container(
         height: 32,
@@ -2334,7 +2327,7 @@ class _RepoScreenState extends State<RepoScreen> {
       onSubmitted: (_) => _runSearch(),
       decoration: InputDecoration(
         isDense: true,
-        // 22px box like the Tauri one: 11px × 1.3 line + 8px each side, less
+        // 22px box: 11px × 1.3 line + 8px each side, less
         // the 8px desktop's compact visual density takes off. `constraints`
         // does not work here — it grows the widget but not the painted box.
         contentPadding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
@@ -2353,7 +2346,7 @@ class _RepoScreenState extends State<RepoScreen> {
   /// there are no lanes to draw and pretending otherwise would draw a wrong
   /// graph rather than no graph.
   Widget _searchList(Palette p) => ListView.builder(
-        itemExtent: 22,
+        itemExtent: 26,
         itemCount: _searchResults!.length,
         itemBuilder: (context, i) {
           final c = _searchResults![i];
@@ -2541,9 +2534,7 @@ class _RepoScreenState extends State<RepoScreen> {
   }
 }
 
-/// A draggable divider. The DOM version gets the cursor and the hit area from
-/// CSS and the drag from three pointer listeners; here the whole thing is one
-/// widget, which is the trade this port keeps making.
+/// A draggable divider: cursor, hit area and drag in one widget.
 class _Splitter extends StatelessWidget {
   const _Splitter({
     required this.axis,
@@ -2651,8 +2642,8 @@ class _ToolButtonState extends State<_ToolButton> {
 /// The centre pill: which project is open, and the menu that switches it.
 ///
 /// It carries the *project* name — the workspace root for a multi-repo
-/// workspace — while the left label carries the full path. Same division as the
-/// Tauri toolbar: the pill is for recognising and switching, the label is for
+/// workspace — while the left label carries the full path. The pill is for
+/// recognising and switching, the label is for
 /// knowing exactly where you are.
 class _ProjectPill extends StatefulWidget {
   const _ProjectPill({
@@ -2717,8 +2708,8 @@ class _ProjectPillState extends State<_ProjectPill> {
 /// 打开项目: one button that opens, one arrow that picks which editor opens it.
 ///
 /// A split button rather than a right-click, because "which editor" is a choice
-/// people change often enough to deserve a visible control — the Tauri toolbar
-/// draws it the same way, with the chosen editor's own icon on the main half.
+/// people change often enough to deserve a visible control, with the chosen
+/// editor's own icon on the main half.
 class _OpenProjectButton extends StatefulWidget {
   const _OpenProjectButton({
     required this.palette,
@@ -2852,7 +2843,7 @@ class _SectionHead extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(10, 10, 6, 4),
+      padding: const EdgeInsets.fromLTRB(10, 10, 6, 6),
       child: Row(
         children: [
           Text(
@@ -3017,8 +3008,7 @@ class _SidebarRow extends StatefulWidget {
   /// Small bordered tag after the label — the repo list's branch name.
   final String? badge;
 
-  /// Marks the current entry by weight instead of the [active] fill, the way
-  /// the Tauri repo list does.
+  /// Marks the current entry by weight instead of the [active] fill.
   final bool bold;
   final Palette palette;
 
@@ -3061,7 +3051,7 @@ class _SidebarRowState extends State<_SidebarRow> {
             ? null
             : (_) => widget.onTapAt!(menuAnchorBelow(context)),
         child: Container(
-          height: 22,
+          height: 26,
           padding: EdgeInsets.only(left: 10 + widget.indent, right: 10),
           color: widget.active
               ? p.bgSel

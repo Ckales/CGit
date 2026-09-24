@@ -1,5 +1,5 @@
 /* The single data path: every Git call goes through cgit-core over
-   flutter_rust_bridge, the same crate src-tauri calls.
+   flutter_rust_bridge.
 
    There used to be a conditional export here picking between a Dart-side git
    CLI wrapper and a browser fixture. Both are gone: they were second

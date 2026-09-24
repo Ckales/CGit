@@ -13,6 +13,7 @@ dependencies:
   flutter:
     sdk: flutter
   flutter_rust_bridge: 2.13.0
+  re_highlight: ^0.0.3
   shared_preferences: ^2.5.5
 
 dev_dependencies:

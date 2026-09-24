@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""把 src-tauri/icons/icon.svg 的几何栅格化成 macOS appiconset 需要的各个尺寸。
+"""把同目录下 icon.svg 的几何栅格化成 macOS appiconset 需要的各个尺寸。
 
 这个脚本存在的原因：本机没有任何 SVG 渲染器，而图标只有一个圆角矩形、两段圆头
 线和三个圆——直接按距离场画比装一套渲染链便宜。几何值全部抄自 icon.svg，改那边
 就得同步改这里。
 
-关键的一条：画布外圈必须保持透明。Tauri 版的图标按 macOS 图标栅格内缩
+关键的一条：画布外圈必须保持透明。icon.svg 按 macOS 图标栅格内缩
 （transform translate(42 42) scale(0.8359375)），压平到白底会让它在程序坞里比
 邻居大一圈，而且没有圆角。
 """

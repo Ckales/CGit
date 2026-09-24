@@ -41,7 +41,7 @@ List<MenuAction> branchMenu({
     MenuAction('推送', () => run(BranchCommand.push)),
     // A patch lands in the working tree, and that only ever belongs to the
     // checked-out branch — offering these elsewhere would either lie or smuggle
-    // in a checkout. Flattened from the Tauri submenu: the choice is binary.
+    // in a checkout. Flat rather than a submenu: the choice is binary.
     if (branch.isCurrent) ...[
       MenuAction('应用补丁（从文件）…', () => run(BranchCommand.applyPatchFromFile)),
       MenuAction(

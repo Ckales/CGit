@@ -10,15 +10,14 @@ import 'theme.dart';
 /// One repo's rows in the change tree.
 typedef RepoChanges = ({RepoRef repo, List<FileStatus> changes});
 
-/// The commit modal, laid out like the Tauri one: the change tree and commit
-/// box on the left, the main window's diff pane on the right.
+/// The commit modal: the change tree and commit box on the left, the main
+/// window's diff pane on the right.
 ///
-/// Like the Tauri dialog it spans the workspace: one tree per repo with
-/// changes, and 提交 commits every repo that has something staged.
+/// It spans the workspace: one tree per repo with changes, and 提交 commits
+/// every repo that has something staged.
 ///
-/// The Tauri app moves the diff pane element into the dialog while it is open.
-/// The Flutter equivalent is [diffPane]: main.dart hands over the widget it
-/// already builds, so hunk and line staging, ↑/↓ navigation and 并排 all work
+/// The diff pane is [diffPane]: main.dart hands over the widget it already
+/// builds, so hunk and line staging, ↑/↓ navigation and 并排 all work
 /// here with no second diff view to keep in step.
 class CommitSheet extends StatefulWidget {
   const CommitSheet({
@@ -43,8 +42,8 @@ class CommitSheet extends StatefulWidget {
   /// Remembers 树形 / 平铺. Tests leave it out and get the tree.
   final Prefs? prefs;
 
-  /// Inline under the history, scoped to the repo picked in the sidebar — the
-  /// Tauri docked commit panel — instead of a dialog over the window.
+  /// Inline under the history, scoped to the repo picked in the sidebar,
+  /// instead of a dialog over the window.
   final bool docked;
 
   /// Every workspace repo with changes, in sidebar order. Docked, only the
@@ -101,8 +100,7 @@ class _CommitSheetState extends State<CommitSheet> {
   /// shown as that field's hint.
   String _identity = '正在读取当前 Git 身份…';
 
-  /// Folded tree nodes, keyed like the Tauri `collapsedChangeNodes`. Kept
-  /// across refreshes so staging a file does not reopen what was folded.
+  /// Folded tree nodes. Kept across refreshes so staging a file does not reopen what was folded.
   final _collapsed = <String>{};
 
   /// 平铺：each file on one row under its repo, labelled by its full path.
@@ -170,8 +168,7 @@ class _CommitSheetState extends State<CommitSheet> {
       _error = null;
     });
     try {
-      // Every repo's staged diff, headed by its name when there are several —
-      // the Tauri stagedPatch.
+      // Every repo's staged diff, headed by its name when there are several.
       final parts = <String>[];
       for (final g in widget.groups) {
         if (!g.changes.any((f) => f.staged)) continue;
@@ -277,7 +274,7 @@ class _CommitSheetState extends State<CommitSheet> {
     }
     // Amending rewords the active repo's HEAD and is allowed with nothing
     // staged. A plain commit goes to every repo with something staged, one
-    // `git commit` each — the Tauri doCommit.
+    // `git commit` each.
     final targets = <RepoRef>[];
     if (_amend) {
       targets.add(widget.active);
@@ -389,7 +386,7 @@ class _CommitSheetState extends State<CommitSheet> {
         child: LayoutBuilder(
           builder: (context, box) => Center(
             child: Container(
-              // `width: min(1240px, 96vw); height: 88vh` in the Tauri CSS.
+              // At most 1240 wide, 96% of the window; 88% of its height.
               width: box.maxWidth * 0.96 > 1240 ? 1240 : box.maxWidth * 0.96,
               height: box.maxHeight * 0.88,
               padding: const EdgeInsets.all(16),
@@ -547,7 +544,7 @@ class _CommitSheetState extends State<CommitSheet> {
     required bool forceOpen,
   }) {
     // A path staged and then edited again shows up twice. Both stay leaves,
-    // and only that pair gets a 已暂存 / 未暂存 suffix — the Tauri rule.
+    // and only that pair gets a 已暂存 / 未暂存 suffix.
     final occurrences = <String, int>{};
     for (final f in files) {
       occurrences[f.path] = (occurrences[f.path] ?? 0) + 1;
@@ -830,7 +827,7 @@ class _CommitSheetState extends State<CommitSheet> {
 /* ---------- pieces ---------- */
 
 /// One row of the change tree: disclosure triangle (folders), checkbox, then
-/// the row's own content. Indented `6 + depth × 14`px, as in the Tauri CSS.
+/// the row's own content. Indented `6 + depth × 14`px.
 class _TreeRow extends StatefulWidget {
   const _TreeRow({
     required this.depth,
@@ -874,7 +871,7 @@ class _TreeRowState extends State<_TreeRow> {
       onExit: (_) => setState(() => _hover = false),
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
-        // On press, as in the Tauri list: a watcher refresh landing between
+        // On press: a watcher refresh landing between
         // press and release would otherwise swallow the click.
         onTapDown: widget.leaf ? (_) => widget.onPress?.call() : null,
         onTap: widget.leaf ? null : widget.onToggle,
@@ -914,8 +911,7 @@ class _TreeRowState extends State<_TreeRow> {
   }
 }
 
-/// The `border: 4px solid transparent; border-left-color` triangle the Tauri
-/// summary rows draw, turned 90° when open.
+/// The disclosure triangle on folder rows, turned 90° when open.
 class Disclosure extends StatelessWidget {
   const Disclosure({super.key, required this.open, required this.color});
   final bool open;
@@ -1015,7 +1011,7 @@ class StatusBadge extends StatelessWidget {
   }
 }
 
-/// A checkbox with the Tauri tree's three states: ticked, clear, and dashed
+/// A checkbox with three states: ticked, clear, and dashed
 /// (`value == null`) for a folder that is partly staged.
 class _Check3 extends StatelessWidget {
   const _Check3({required this.value, required this.tooltip, this.onTap});
@@ -1103,7 +1099,7 @@ class _DiscardButtonState extends State<_DiscardButton> {
   }
 }
 
-/// The Tauri `textarea`: 70px, own background, accent border on focus.
+/// The commit message box: 70px, own background, accent border on focus.
 class MessageBox extends StatefulWidget {
   const MessageBox({super.key, required this.controller});
   final TextEditingController controller;
@@ -1141,7 +1137,7 @@ class _MessageBoxState extends State<MessageBox> {
       child: TextField(
         controller: widget.controller,
         focusNode: _focus,
-        // The dialog opens to write a message, as the Tauri one focuses it.
+        // The dialog opens to write a message.
         autofocus: true,
         maxLines: null,
         expands: true,
@@ -1236,8 +1232,8 @@ class CheckLabel extends StatelessWidget {
   }
 }
 
-/// The Tauri `button`: raised background, 6px corners, 0.45 opacity when
-/// disabled. `icon` is `.icon-btn` (tight horizontal padding); `primary` is
+/// The sheet's button: raised background, 6px corners, 0.45 opacity when
+/// disabled. `icon` gives tight horizontal padding; `primary` is
 /// the accent 提交; `joinLeft` / `joinRight` square off the split button's
 /// inner corners.
 class _Btn extends StatefulWidget {
@@ -1324,7 +1320,7 @@ class _BtnState extends State<_Btn> {
   }
 }
 
-/// The two 16×16 SVG icons of the Tauri commit actions, stroked the same way.
+/// The two 16×16 stroked icons of the commit actions.
 class _Glyph extends StatelessWidget {
   const _Glyph._(this.build_, this.color, this.width);
 

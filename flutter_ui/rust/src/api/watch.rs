@@ -1,23 +1,21 @@
 //! The two calls that report progress while they run.
 //!
-//! The Tauri frontend turns core's callbacks into webview events
-//! (`repo-changed`, `clone-progress`); here they become Dart streams. That is
-//! the whole difference between the two frontends at this seam — core takes a
-//! plain `Fn(&str)` and neither mechanism leaks into it.
+//! Core's callbacks become Dart streams here. Core takes a plain `Fn(&str)` and
+//! the stream mechanism does not leak into it.
 
 use std::sync::OnceLock;
 
 use crate::frb_generated::StreamSink;
 
-/// The live file-system watcher. It has to outlive the call that starts it, and
-/// unlike Tauri there is no `manage()` to hold it, so it lives here. Opening
+/// The live file-system watcher. It has to outlive the call that starts it, so
+/// it lives here. Opening
 /// another repo replaces the watcher, which drops the previous one.
 fn watch_state() -> &'static cgit_core::WatchState {
     static WATCH: OnceLock<cgit_core::WatchState> = OnceLock::new();
     WATCH.get_or_init(cgit_core::WatchState::new)
 }
 
-/// Open a workspace. Unlike the Tauri command this does not start watching —
+/// Open a workspace. This does not start watching —
 /// core keeps the two apart, and Dart calls [`watch_repo`] with the resolved
 /// root when it wants change notifications.
 pub fn open_workspace(path: String) -> Result<cgit_core::Workspace, String> {

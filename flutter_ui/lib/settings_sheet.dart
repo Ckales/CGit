@@ -13,8 +13,7 @@ import 'theme.dart';
 
 /// 设置：通用 / 外观 / 编辑器 / Git 信息 / AI。
 ///
-/// The five panes and everything in them come from the Tauri dialog. Two of the
-/// rules there are easy to lose in a port and are kept deliberately:
+/// Two rules here are easy to lose and are kept deliberately:
 ///
 ///  * 主题 and 字号 preview live and 取消 puts them back. Picking a font size you
 ///    cannot see until you commit to it is not a choice, it is a guess.
@@ -153,8 +152,8 @@ class _SettingsSheetState extends State<SettingsSheet> {
       }
     } catch (e) {
       // Everything, not just GitError: the scan shells out to the system and
-      // the pane's job is to say why it is empty. The Tauri dialog catches the
-      // same way — an unreported empty list looks like "no editors installed".
+      // the pane's job is to say why it is empty — an unreported empty list
+      // looks like "no editors installed".
       if (mounted) setState(() => _editorScanError = '$e');
     }
 
@@ -238,7 +237,7 @@ class _SettingsSheetState extends State<SettingsSheet> {
   }
 
   /// One button for the whole credential flow, because the useful action
-  /// depends on what is already stored — the same rule the Tauri app uses.
+  /// depends on what is already stored.
   Future<void> _credentialAction() async {
     final git = widget.git;
     if (git == null) return;
@@ -292,8 +291,7 @@ class _SettingsSheetState extends State<SettingsSheet> {
     }
   }
 
-  /// A round trip against a fixed sample diff — the same one the Tauri dialog
-  /// sends, so a working endpoint answers the same way in both.
+  /// A round trip against a fixed sample diff.
   Future<void> _testAi() async {
     if (_aiUrl.text.trim().isEmpty || _aiModel.text.trim().isEmpty) {
       setState(() {

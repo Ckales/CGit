@@ -1,9 +1,8 @@
 //! The generated-from-core command surface.
 //!
-//! One thin `pub fn` per command, exactly as src-tauri/src/lib.rs does for the
-//! webview. Keeping both frontends at the same thinness is what stops the two
-//! from drifting: any behaviour change has to happen in cgit-core, where the
-//! tests are.
+//! One thin `pub fn` per command. Keeping this layer thin is what stops
+//! behaviour from drifting: any behaviour change has to happen in cgit-core,
+//! where the tests are.
 
 use flutter_rust_bridge::frb;
 

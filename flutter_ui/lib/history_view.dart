@@ -4,15 +4,13 @@ import 'context_menu.dart';
 import 'git_text.dart';
 import 'theme.dart';
 
-const _rowHeight = 22.0;
+const _rowHeight = 26.0;
 const _laneWidth = 12.0;
 
 /// The history list with its DAG gutter.
 ///
-/// The DOM version draws these lanes as an inline SVG per row. Flutter has no
-/// retained scene graph to hand a path to, so the gutter is a CustomPainter —
-/// which is the one place in this port where the Flutter code is shorter than
-/// the code it replaces.
+/// Flutter has no retained scene graph to hand a path to, so the gutter is a
+/// CustomPainter.
 class HistoryView extends StatelessWidget {
   const HistoryView({
     super.key,
@@ -106,6 +104,13 @@ class _CommitRowState extends State<_CommitRow> {
                 width: widget.gutter,
                 height: _rowHeight,
                 child: CustomPaint(painter: _LanePainter(widget.row, p)),
+              ),
+              Padding(
+                padding: const EdgeInsets.only(right: 6),
+                child: Text(
+                  c.id.substring(0, 7),
+                  style: mono.copyWith(color: p.yellow),
+                ),
               ),
               for (final ref in c.refs) _RefChip(label: ref, palette: p),
               Expanded(

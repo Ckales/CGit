@@ -8,9 +8,8 @@
 PRODUCT_NAME = CGit
 
 // The application's bundle identifier
-// Shares the Tauri app's namespace (dev.lijing.cgit) but not its
-// identifier: two apps with the same bundle id confuse LaunchServices
-// when both are installed.
+// Kept as-is: the preferences container is keyed by this id, so changing
+// it would lose every existing user's settings.
 PRODUCT_BUNDLE_IDENTIFIER = dev.lijing.cgit.flutter
 
 // The copyright displayed in application information

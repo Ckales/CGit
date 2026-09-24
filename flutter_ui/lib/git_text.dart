@@ -2,9 +2,8 @@ import 'src/rust/api/git.dart' show GraphCommit;
 
 export 'src/rust/api/git.dart' show GraphCommit;
 
-/* Port of src/git-text.js. Pure text/graph helpers, free of Flutter imports so
-   they can be unit-tested with `flutter test` — same reason the JS version
-   stays free of DOM and Tauri imports. These are the functions that silently
+/* Pure text/graph helpers, free of Flutter imports so they can be unit-tested
+   with `flutter test`. These are the functions that silently
    corrupt user data when they're wrong. */
 
 /* ---------- partial (line-level) staging ---------- */

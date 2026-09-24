@@ -9,7 +9,7 @@ void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
 
   group('defaults on a fresh install', () {
-    test('dark theme and split diff, matching the Tauri app', () async {
+    test('dark theme and split diff', () async {
       final prefs = await Prefs.load();
       expect(prefs.isDark, isTrue);
       expect(prefs.isSplitDiff, isTrue);

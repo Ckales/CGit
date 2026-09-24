@@ -2,12 +2,12 @@ import 'package:flutter/material.dart';
 
 import 'theme.dart';
 
-/// The badge beside a dialog title — the Tauri `.status-modal` circle.
+/// The round badge beside a dialog title.
 enum DialogBadge { info, danger }
 
 enum DialogButtonKind { normal, primary, danger }
 
-/// The window every dialog in this app sits in: the Tauri `.modal` box — bgAlt,
+/// The window every dialog in this app sits in: bgAlt,
 /// hairline border, 12px corners, a soft drop shadow — rather than Material's
 /// grey slab. [badge] adds the round icon and indents [body] under the title.
 Future<T?> showAppDialog<T>(
@@ -110,7 +110,7 @@ class DialogText extends StatelessWidget {
   }
 }
 
-/// A one-line notice that stays until dismissed — the Tauri notify box.
+/// A one-line notice that stays until dismissed.
 Future<void> showNotice(BuildContext context, String message) =>
     showAppDialog<void>(
       context,
@@ -157,7 +157,7 @@ class _Badge extends StatelessWidget {
   }
 }
 
-/// The Tauri `button` / `button.primary`, plus a red one for actions that
+/// A normal or primary dialog button, plus a red one for actions that
 /// throw work away. [autofocus] makes Enter press it.
 class DialogButton extends StatefulWidget {
   const DialogButton(
@@ -234,7 +234,7 @@ class _DialogButtonState extends State<DialogButton> {
   }
 }
 
-/// The Tauri `.modal input`: a sunken box whose border turns accent on focus.
+/// A dialog text field: a sunken box whose border turns accent on focus.
 class DialogField extends StatelessWidget {
   const DialogField({
     super.key,

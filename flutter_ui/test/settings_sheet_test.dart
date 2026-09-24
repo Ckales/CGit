@@ -15,9 +15,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// is never read back into it, and what the sheet displays about a stored
 /// credential says only that one exists.
 ///
-/// They also pin the shape of the dialog itself — five panes, matching the
-/// Tauri one. A pane quietly going missing is how this port drifted the first
-/// time: every backend command had a caller, so nothing failed, and 拉取策略 and
+/// They also pin the shape of the dialog itself — five panes. A pane quietly
+/// going missing is how this dialog drifted the first time: every backend command had a caller, so nothing failed, and 拉取策略 and
 /// 历史每页条数 simply had no way to be set.
 class _FakeGit implements Git {
   _FakeGit({this.hasCredential = false, this.storedUsername = ''});

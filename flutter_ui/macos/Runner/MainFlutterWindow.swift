@@ -15,8 +15,7 @@ class MainFlutterWindow: NSWindow {
     // re-applies the nib's frame on the line right after it.
     //
     // macOS then restores the size from the last session on top of this, so
-    // 1280×820 is only what a fresh install opens at — the same geometry
-    // tauri.conf.json declares for the other frontend. The minimum is the part
+    // 1280×820 is only what a fresh install opens at. The minimum is the part
     // that always applies, and it is the one that matters: the toolbar is a
     // fixed row of buttons, and below this width Flutter draws a striped
     // overflow band rather than reflowing.

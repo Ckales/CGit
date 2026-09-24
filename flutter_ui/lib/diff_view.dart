@@ -10,11 +10,9 @@ enum DiffMode { split, unified }
 
 /// One file's patch: a stack of hunks, each independently selectable.
 ///
-/// In the DOM version this pane is rebuilt imperatively — renderHunks() clears
-/// `#diff` and appends spans, and `paint()` toggles a `picked` class on the
-/// rows that changed. Here the picked set is state and the rows are a pure
-/// function of it, so there is no paint step: the only thing this file has that
-/// main.js does not is the plumbing that carries the selection back up.
+/// The picked set is state and the rows are a pure function of it, so there is
+/// no separate paint step. Beyond drawing the rows, this file is the plumbing
+/// that carries the selection back up.
 class DiffPane extends StatelessWidget {
   const DiffPane({
     super.key,
@@ -49,13 +47,12 @@ class DiffPane extends StatelessWidget {
       );
     }
 
-    // SelectionArea is what buys back the one thing the DOM gives for free:
-    // dragging a selection across rows and copying it. It only covers the
+    // SelectionArea is what makes dragging a selection across rows and copying
+    // it work. It only covers the
     // widgets built below it, which is why the rows are built eagerly rather
     // than through ListView.builder.
     //
-    // ponytail: eager build matches the DOM version's behaviour and keeps
-    // selection whole. Switch to ListView.builder if a single file's diff ever
+    // ponytail: eager build keeps selection whole. Switch to ListView.builder if a single file's diff ever
     // gets big enough to stutter — and accept that selection then stops at the
     // viewport edge.
     return Container(
@@ -222,7 +219,7 @@ class _HunkViewState extends State<_HunkView> {
 
   /// Fixed-width number columns and two equal text columns, so rows stay aligned
   /// without synchronising two scroll positions. Long lines wrap inside their
-  /// own half rather than scrolling — same call the CSS version makes.
+  /// own half rather than scrolling.
   List<Widget> _splitRows(Palette palette, bool interactive) {
     final paired = pairHunkLines(widget.hunk);
     if (paired == null) return _unifiedRows(palette, interactive);
@@ -273,8 +270,7 @@ class _HunkViewState extends State<_HunkView> {
   }
 
   /// The pickable-row wrapper: hover feedback, click/shift-click, and the
-  /// selected outline. In CSS this is three rules (`.pickable`, `.pickable:hover
-  /// .split-text`, `.picked`); here every one of them is explicit state.
+  /// selected outline, each of them explicit state.
   Widget _row({
     required int row,
     required List<int> picks,
@@ -298,8 +294,8 @@ class _HunkViewState extends State<_HunkView> {
     );
 
     if (hovered) {
-      // CSS does this with `filter: brightness(1.25)`. Flutter has no filter
-      // shorthand, so it is an explicit overlay.
+      // Hover brightens the row. Flutter has no brightness filter shorthand,
+      // so it is an explicit overlay.
       content = Stack(
         children: [
           content,
@@ -329,7 +325,7 @@ class _HunkViewState extends State<_HunkView> {
   }
 }
 
-/// The Tauri `.hunk-bar` above each working-file hunk: 暂存此块 applies the
+/// The bar above each working-file hunk: 暂存此块 applies the
 /// whole hunk, 暂存选中行 only the picked lines (dimmed until some are), and
 /// the hint says how picking works.
 class _HunkActions extends StatelessWidget {
@@ -403,8 +399,8 @@ class _NumCell extends StatelessWidget {
         color: palette.bgAlt,
         border: Border(right: BorderSide(color: palette.border)),
       ),
-      // Line numbers must stay out of a copied selection, which in CSS is
-      // `user-select: none` and here is an explicit opt-out widget.
+      // Line numbers must stay out of a copied selection, hence the explicit
+      // opt-out widget.
       child: SelectionContainer.disabled(
         child: Text(
           cell == null ? '' : '${cell!.no}',

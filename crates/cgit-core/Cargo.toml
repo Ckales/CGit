@@ -1,7 +1,7 @@
 [package]
 name = "cgit-core"
 version = "0.1.0"
-description = "Git logic for CGit — shared by the Tauri and Flutter frontends"
+description = "Git logic for CGit"
 authors = ["Ckales"]
 license = "MIT"
 edition = "2021"

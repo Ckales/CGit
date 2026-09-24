@@ -6,9 +6,9 @@ import 'theme.dart';
 
 /// The interactive-rebase dialog: reorder, pick an action per commit, reword.
 ///
-/// Rows are listed in the order git applies them, oldest at the top. The Tauri
-/// version does the same and says so in the title — showing newest-first the
-/// way the history list does would invert the meaning of "move up".
+/// Rows are listed in the order git applies them, oldest at the top — showing
+/// newest-first the way the history list does would invert the meaning of
+/// "move up".
 class RebaseSheet extends StatefulWidget {
   const RebaseSheet({
     super.key,

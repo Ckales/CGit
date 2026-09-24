@@ -1,16 +1,16 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
+import 'code_field.dart';
 import 'git_text.dart';
 import 'theme.dart';
 
 /// The three-pane merge window: ours | result | theirs.
 ///
 /// Rows are laid out as triplets so a row is as tall as its tallest pane and
-/// the three stay aligned block by block with no scroll-syncing. The CSS
-/// version gets that from one grid; here it is a Column of IntrinsicHeight
-/// Rows, which is the same bargain — correct alignment, at the cost of an
-/// intrinsic-size pass per row.
+/// the three stay aligned block by block with no scroll-syncing. It is a Column
+/// of IntrinsicHeight Rows: correct alignment, at the cost of an intrinsic-size
+/// pass per row.
 ///
 /// Long lines are clipped, not wrapped, and one shared horizontal offset moves
 /// all three panes together. Wrapping would be far less code, but three panes
@@ -54,17 +54,28 @@ class _MergeWindowState extends State<MergeWindow> {
 
   /// One controller per editable cell. Clicking » or « rewrites the result
   /// text, so the controllers have to outlive a rebuild.
-  final _editors = <ConflictBlock, TextEditingController>{};
+  final _editors = <ConflictBlock, CodeController>{};
+
+  late Syntax _syntax;
+
+  /// What Tab inserts: whatever the file already indents with.
+  late String _indent;
 
   /// The shared horizontal offset every pane's text is translated by.
   double _scrollX = 0;
   double _widest = 0;
 
-  final _wholeFile = TextEditingController();
+  late final CodeController _wholeFile;
+
+  /// ↑ / ↓ jump between conflict rows; -1 until the first jump.
+  final _conflictKeys = <ConflictBlock, GlobalKey>{};
+  int _current = -1;
 
   @override
   void initState() {
     super.initState();
+    _syntax = Syntax(widget.file);
+    _wholeFile = CodeController(syntax: _syntax);
     _parse();
   }
 
@@ -77,6 +88,8 @@ class _MergeWindowState extends State<MergeWindow> {
         c.dispose();
       }
       _editors.clear();
+      _conflictKeys.clear();
+      _current = -1;
       _scrollX = 0;
       _parse();
     }
@@ -84,6 +97,7 @@ class _MergeWindowState extends State<MergeWindow> {
 
   void _parse() {
     _parsed = parseConflicts(widget.content);
+    _indent = indentUnitOf(widget.content);
     _conflicts =
         _parsed.blocks.where((b) => b.type == BlockType.conflict).toList();
     _wholeFile.text = widget.content;
@@ -105,8 +119,9 @@ class _MergeWindowState extends State<MergeWindow> {
   /// listener: a listener also fires when the gutter buttons rewrite the text
   /// programmatically, which would record a machine-written line as a hand edit
   /// and make the block look decided when it is not.
-  TextEditingController _editor(ConflictBlock b, String initial) => _editors
-      .putIfAbsent(b, () => TextEditingController(text: b.edited ?? initial));
+  CodeController _editor(ConflictBlock b, String initial) =>
+      _editors.putIfAbsent(
+          b, () => CodeController(text: b.edited ?? initial, syntax: _syntax));
 
   void _decide(ConflictBlock b, String side, bool take) {
     setState(() {
@@ -132,6 +147,19 @@ class _MergeWindowState extends State<MergeWindow> {
         _editors[b]?.text = b.resultLines.join('\n');
       }
     });
+  }
+
+  /// Steps to the previous / next conflict, wrapping at either end.
+  void _jump(int delta) {
+    final count = _conflicts.length;
+    final next = _current < 0
+        ? (delta > 0 ? 0 : count - 1)
+        : (_current + delta + count) % count;
+    setState(() => _current = next);
+    final target = _conflictKeys[_conflicts[next]]?.currentContext;
+    if (target == null) return;
+    Scrollable.ensureVisible(target,
+        alignment: 0.2, duration: const Duration(milliseconds: 150));
   }
 
   void _shift(double dx, double viewportWidth) {
@@ -183,6 +211,16 @@ class _MergeWindowState extends State<MergeWindow> {
           children: [
             Text('合并 — ${widget.file}', style: ui.copyWith(color: p.text)),
             const Spacer(),
+            if (_conflicts.isNotEmpty) ...[
+              Text(
+                '${_current < 0 ? '-' : _current + 1} / ${_conflicts.length}',
+                style: ui.copyWith(color: p.textDim, fontSize: 11),
+              ),
+              const SizedBox(width: 4),
+              _NavButton(label: '↑', tooltip: '上一处冲突', onTap: () => _jump(-1)),
+              _NavButton(label: '↓', tooltip: '下一处冲突', onTap: () => _jump(1)),
+              const SizedBox(width: 10),
+            ],
             _IconText(label: '✕', onTap: widget.onClose),
           ],
         ),
@@ -203,13 +241,10 @@ class _MergeWindowState extends State<MergeWindow> {
             child: Container(
               color: p.diffBg,
               padding: const EdgeInsets.all(8),
-              child: TextField(
+              child: CodeField(
                 controller: _wholeFile,
-                maxLines: null,
+                indentUnit: _indent,
                 expands: true,
-                style: mono.copyWith(color: p.text),
-                cursorColor: p.accent,
-                decoration: const InputDecoration.collapsed(hintText: ''),
               ),
             ),
           ),
@@ -305,6 +340,7 @@ class _MergeWindowState extends State<MergeWindow> {
   }
 
   Widget _conflictRow(Palette p, ConflictBlock b) => IntrinsicHeight(
+        key: _conflictKeys.putIfAbsent(b, GlobalKey.new),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -403,12 +439,9 @@ class _MergeWindowState extends State<MergeWindow> {
                 overflow: TextOverflow.ellipsis,
               ),
             ),
-          TextField(
+          CodeField(
             controller: controller,
-            maxLines: null,
-            style: mono.copyWith(color: p.text),
-            cursorColor: p.accent,
-            decoration: const InputDecoration.collapsed(hintText: ''),
+            indentUnit: _indent,
             // Typing is a decision: it settles the block even if neither side
             // button was pressed.
             onChanged: (text) => setState(() => b.edited = text),
@@ -427,16 +460,23 @@ class _MergeWindowState extends State<MergeWindow> {
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
         child: Transform.translate(
           offset: Offset(-_scrollX, 0),
-          child: Align(
+          // Lets the text lay out at full width. Under an Align it got the
+          // pane's width and clipped itself, so scrolling only slid the
+          // already-cut text around.
+          child: OverflowBox(
             alignment: Alignment.topLeft,
+            maxWidth: double.infinity,
             // Per block, not around the whole grid: one area spanning the rows
             // would drag a selection across all three columns.
             child: SelectionArea(
-              child: Text(
-                text,
-                softWrap: false,
-                maxLines: null,
-                style: mono.copyWith(color: dim ? p.textDim : p.text),
+              child: Opacity(
+                opacity: dim ? 0.6 : 1,
+                child: Text.rich(
+                  _syntax.cached(text, mono.copyWith(color: p.text),
+                      dark: Syntax.isDark(p)),
+                  softWrap: false,
+                  maxLines: null,
+                ),
               ),
             ),
           ),
@@ -590,7 +630,7 @@ class _GutterButton extends StatelessWidget {
   }
 }
 
-/// » « ✕ on a 14px square, 1.6px strokes.
+/// » « ✕ ↑ ↓ on a 14px square, 1.6px strokes.
 class _GutterGlyph extends CustomPainter {
   _GutterGlyph(this.label, this.color);
   final String label;
@@ -605,6 +645,15 @@ class _GutterGlyph extends CustomPainter {
         ..lineTo(11, 11)
         ..moveTo(11, 3)
         ..lineTo(3, 11);
+    } else if (label == '↑' || label == '↓') {
+      path
+        ..moveTo(3, 9)
+        ..lineTo(7, 5)
+        ..lineTo(11, 9);
+      if (label == '↓') {
+        canvas.translate(0, size.height);
+        canvas.scale(1, -1);
+      }
     } else {
       // Two chevrons pointing right; « is the same mirrored.
       for (final x in [2.5, 7.5]) {
@@ -632,6 +681,38 @@ class _GutterGlyph extends CustomPainter {
   @override
   bool shouldRepaint(_GutterGlyph old) =>
       old.label != label || old.color != color;
+}
+
+class _NavButton extends StatelessWidget {
+  const _NavButton(
+      {required this.label, required this.tooltip, required this.onTap});
+  final String label;
+  final String tooltip;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = Theming.of(context);
+    return Tooltip(
+      message: tooltip,
+      waitDuration: const Duration(milliseconds: 600),
+      child: MouseRegion(
+        cursor:
+            onTap == null ? SystemMouseCursors.basic : SystemMouseCursors.click,
+        child: GestureDetector(
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.all(5),
+            child: CustomPaint(
+              size: const Size(14, 14),
+              painter: _GutterGlyph(label,
+                  onTap == null ? p.textDim.withValues(alpha: 0.4) : p.text),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _IconText extends StatelessWidget {

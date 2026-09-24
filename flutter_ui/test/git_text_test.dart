@@ -1,9 +1,9 @@
 import 'package:cgit_flutter/git_text.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-/// Ported from test/git-text.test.js, case for case, on the functions this
-/// port actually carries over. The conflict-merge, AI-endpoint, push-rejection
-/// and path-tree suites stay unported because their functions do — see README.
+/// The partial-staging and text/graph helpers in git_text.dart. Conflict
+/// parsing, the AI endpoint, push failures and the path tree are covered in
+/// git_text_more_test.dart.
 const hunk = '@@ -1,3 +1,4 @@ fn main\n a\n-b\n+B\n+c\n d\n';
 
 void main() {
@@ -173,8 +173,8 @@ void main() {
     test('splits on code points, not UTF-16 units', () {
       // U+1F600 and U+1F601 share a high surrogate and differ only in the low
       // one, so a UTF-16-unit scan stops inside the pair and leaves a lone
-      // surrogate in the prefix. Dart's String indexing has exactly the same
-      // hazard as JS's, which is why both versions iterate code points.
+      // surrogate in the prefix. Dart's String indexing has exactly this
+      // hazard, which is why the diff iterates code points.
       final d = intraLineDiff('a\u{1F600}b', 'a\u{1F601}b')!;
       expect(d.left.mid, '\u{1F600}');
       expect(d.right.mid, '\u{1F601}');
@@ -237,8 +237,8 @@ GraphCommit _c(String id, List<String> parents) => GraphCommit(
       refs: const [],
     );
 
-/// Dart has no String.isWellFormed, so this is the check the JS test gets from
-/// the platform: no unpaired surrogate anywhere in the piece.
+/// Dart has no String.isWellFormed, so this is that check by hand: no unpaired
+/// surrogate anywhere in the piece.
 bool _wellFormed(String s) {
   for (var i = 0; i < s.length; i++) {
     final u = s.codeUnitAt(i);

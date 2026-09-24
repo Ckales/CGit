@@ -4,10 +4,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 /// Window and view settings that survive a restart.
 ///
-/// The Tauri app keeps these in WebKit `localStorage`; there is no such thing
-/// here, so they go through shared_preferences, which writes a plist inside the
-/// app's own container. Same durability, same scope — and unlike localStorage
-/// it survives a change of web view.
+/// They go through shared_preferences, which writes a plist inside the app's
+/// own container.
 ///
 /// AI settings (token included) live in [AiSettings], same store.
 class Prefs {
@@ -51,9 +49,8 @@ class Prefs {
   Future<void> setSplitDiff(bool split) =>
       _store.setString(_keyDiffView, split ? 'split' : 'unified');
 
-  /// The base size everything else is scaled against, matching the Tauri app's
-  /// root `font-size`. Applied once as a text scale rather than threaded into
-  /// every style, which is what the CSS variable does there too.
+  /// The base size everything else is scaled against. Applied once as a text
+  /// scale rather than threaded into every style.
   static const fontSizes = [12, 13, 15];
   static const baseFontSize = 13;
 

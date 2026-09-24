@@ -302,4 +302,65 @@ void main() {
     await tester.pump();
     expect(copied, 'theirs one');
   }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
+
+  testWidgets('a long line lays out whole, so scrolling can reveal it',
+      (tester) async {
+    final long = 'x = "${'长' * 200}"';
+    await tester.pumpWidget(_host(
+        _Harness(), 'a\n<<<<<<< HEAD\n$long\n=======\nb\n>>>>>>> o\nz'));
+    await tester.pump();
+    // Clipped to its pane, the paragraph would be a third of 1180px wide.
+    expect(tester.getSize(find.text(long).first).width, greaterThan(1000));
+  });
+
+  testWidgets('Tab indents the selected result lines instead of moving focus',
+      (tester) async {
+    final h = _Harness();
+    await tester.pumpWidget(_host(h, conflicted));
+    await tester.tap(find.text('全部采用我方'));
+    await tester.pump();
+
+    final field = find.byWidgetPredicate((w) =>
+        w is TextField && w.controller?.text == 'ours one\nours two');
+    await tester.tap(field);
+    await tester.pump();
+    final controller = tester.widget<TextField>(field).controller!;
+    controller.selection =
+        TextSelection(baseOffset: 0, extentOffset: controller.text.length);
+    await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+    await tester.pump();
+
+    await tester.tap(find.text('应用'));
+    await tester.pump();
+    expect(h.saved, 'head line\n    ours one\n    ours two\ntail line');
+  });
+
+  testWidgets('↑ / ↓ step through the conflicts, scrolling each into view',
+      (tester) async {
+    final filler = List.generate(80, (i) => 'line $i').join('\n');
+    final content = 'a\n<<<<<<< HEAD\nfirst ours\n=======\nfirst theirs\n'
+        '>>>>>>> o\n$filler\n<<<<<<< HEAD\nsecond ours\n=======\n'
+        'second theirs\n>>>>>>> o\nz';
+    await tester.pumpWidget(_host(_Harness(), content));
+    expect(find.text('- / 2'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('下一处冲突'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('下一处冲突'));
+    await tester.pumpAndSettle();
+    expect(find.text('2 / 2'), findsOneWidget);
+    // Scrolled far enough that the second block sits inside the window.
+    final window = tester.getRect(find.byType(MergeWindow));
+    final second = tester.getRect(find.text('second ours'));
+    expect(second.top, greaterThan(window.top));
+    expect(second.bottom, lessThan(window.bottom));
+
+    // Wraps around at the end, and ↑ goes back.
+    await tester.tap(find.byTooltip('下一处冲突'));
+    await tester.pumpAndSettle();
+    expect(find.text('1 / 2'), findsOneWidget);
+    await tester.tap(find.byTooltip('上一处冲突'));
+    await tester.pumpAndSettle();
+    expect(find.text('2 / 2'), findsOneWidget);
+  });
 }

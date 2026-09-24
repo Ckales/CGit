@@ -1,14 +1,8 @@
-# dependencies & build output
-node_modules
-dist
-src-tauri/target
+# build output
 crates/*/target
 flutter_ui/rust/target
 AGENTS.md
 CLAUDE.md
-
-# tauri generated schemas
-src-tauri/gen/schemas
 
 # IDE
 .idea

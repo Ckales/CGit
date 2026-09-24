@@ -3,10 +3,8 @@ import 'package:cgit_flutter/theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-/// The widget half of the port. The JS version has no equivalent suite — its
-/// rendering is only exercised by hand — so these cover the one interaction
-/// that can corrupt the index if it is wrong: which lines a click actually
-/// stages.
+/// Widget tests for the diff pane. They cover the one interaction that can
+/// corrupt the index if it is wrong: which lines a click actually stages.
 const hunk = '@@ -1,3 +1,4 @@ fn main\n a\n-b\n+B\n+c\n d\n';
 
 Widget _host(Widget child) => MaterialApp(

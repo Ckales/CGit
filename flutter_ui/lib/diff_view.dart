@@ -104,7 +104,7 @@ class _HunkView extends StatefulWidget {
 
 class _HunkViewState extends State<_HunkView> {
   /// The key for a row, when that row starts a run of changed lines.
-  GlobalKey? _blockKey(int row) => widget.blockKeys['${widget.index}:\$row'];
+  GlobalKey? _blockKey(int row) => widget.blockKeys['${widget.index}:$row'];
 
   final _picked = <int>{};
   int? _anchor;

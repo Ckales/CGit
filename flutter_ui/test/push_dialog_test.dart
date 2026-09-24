@@ -1,6 +1,8 @@
+import 'package:cgit_flutter/context_menu.dart';
 import 'package:cgit_flutter/git.dart';
 import 'package:cgit_flutter/push_dialog.dart';
 import 'package:cgit_flutter/theme.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -43,6 +45,7 @@ void main() {
         if (hasPushWork(r.tracking)) r.repo.path,
     });
     final asked = <String>[];
+    final copied = <String>[];
     await tester.pumpWidget(MaterialApp(
       home: Theming(
         palette: Palette.dark,
@@ -57,6 +60,9 @@ void main() {
                     path: 'src/a.dart', status: 'modified', staged: false),
               ];
             },
+            fileMenu: (repo, path) => [
+              MenuAction('复制文件路径', () => copied.add('$repo/$path')),
+            ],
           ),
         ),
       ),
@@ -68,6 +74,18 @@ void main() {
     expect(find.text('web  1 个文件'), findsOneWidget);
     expect(find.text('a.dart'), findsOneWidget);
     expect(find.text('↑3'), findsOneWidget);
+
+    // Right-click a file: the menu acts on that repo's file.
+    await tester.tap(find.text('a.dart'), buttons: kSecondaryButton);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('复制文件路径'));
+    await tester.pumpAndSettle();
+    expect(copied, ['/w/web/src/a.dart']);
+
+    // Folding a folder hides its files.
+    await tester.tap(find.text('src  1 个文件'));
+    await tester.pump();
+    expect(find.text('a.dart'), findsNothing);
 
     await tester.tap(find.byKey(const ValueKey('push-row-/w/db')));
     await tester.pump();

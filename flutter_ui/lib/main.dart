@@ -1054,7 +1054,10 @@ class _RepoScreenState extends State<RepoScreen> {
   /// [repo] is the file's repo when it is not the active one — the commit
   /// dialog lists them all. History and blame show in views that read through
   /// [_git], so those switch to it first.
-  List<MenuAction> _commitFileMenu(String path, {String? repo}) {
+  /// [beforeView] runs ahead of history and blame — the push dialog closes
+  /// itself there, or the view would open behind it.
+  List<MenuAction> _commitFileMenu(String path,
+      {String? repo, VoidCallback? beforeView}) {
     final root = repo ?? _repoPath;
     return [
       MenuAction('从项目打开', () => _openProjectAtFile(path, Git(root))),
@@ -1065,10 +1068,12 @@ class _RepoScreenState extends State<RepoScreen> {
         if (mounted) setState(() => _status = '已复制 $full');
       }),
       MenuAction('文件历史', () async {
+        beforeView?.call();
         await _activate(root);
         await _showFileHistory(path);
       }),
       MenuAction('逐行归属 (blame)', () async {
+        beforeView?.call();
         await _activate(root);
         await _showBlame(path);
       }),
@@ -1381,11 +1386,13 @@ class _RepoScreenState extends State<RepoScreen> {
     final targets = await showAppDialog<Set<String>>(
       context,
       title: '推送提交',
-      maxWidth: 720,
+      maxWidth: 900,
       body: PushDialogBody(
         rows: rows,
         picked: picked,
         loadFiles: (path) => Git(path).pushFiles(),
+        fileMenu: (repo, path) => _commitFileMenu(path,
+            repo: repo, beforeView: () => Navigator.of(context).pop()),
       ),
       actions: [
         DialogButton('取消', onTap: () => Navigator.of(context).pop()),

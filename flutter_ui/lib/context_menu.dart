@@ -1,3 +1,5 @@
+import 'dart:math' show max;
+
 import 'package:flutter/material.dart';
 
 import 'theme.dart';
@@ -49,22 +51,25 @@ class MenuAction {
   static void _noop() {}
 }
 
-/// Where a dropdown opens: under the left edge of the widget that owns
-/// [context], not wherever the pointer happened to land on it — a menu that
-/// shifts with the click point looks like it is chasing the mouse. [right]
-/// anchors under the right edge instead, for [showRepoMenu]'s `alignRight`.
+/// Where a dropdown opens: centred under the widget that owns [context], not
+/// wherever the pointer happened to land on it — a menu that shifts with the
+/// click point looks like it is chasing the mouse. [right] anchors under the
+/// right edge instead, for [showRepoMenu]'s `alignRight`.
 Offset menuAnchorBelow(BuildContext context, {bool right = false}) {
   final box = context.findRenderObject() as RenderBox;
-  return box
-      .localToGlobal(Offset(right ? box.size.width : 0, box.size.height + 4));
+  return box.localToGlobal(
+      Offset(right ? box.size.width : box.size.width / 2, box.size.height + 4));
 }
 
-/// Show a context menu at a global position.
+/// Show a context menu at a global position: centred right below it, or
+/// right above it when the window has no room below.
 ///
-/// Flutter's own `showMenu` does the placement, the screen-edge clamping and
-/// the dismiss-on-outside-click. The rows are our own entries rather than
-/// `PopupMenuItem`, whose Material ink hover can't be restyled into the accent
-/// highlight.
+/// Our own route rather than `showMenu`, which can only left- or right-align
+/// on the point — it picked the side by which half of the window was clicked,
+/// so the menu hung off the pointer's left or right. Centring needs the
+/// menu's width, and only a layout delegate gets that before placing it. The
+/// rows are our own entries rather than `PopupMenuItem`, whose Material ink
+/// hover can't be restyled into the accent highlight.
 ///
 /// ponytail: flat menus only. Flutter has no equivalent of the "keep the
 /// submenu open while the mouse crosses to it" timer that makes submenus
@@ -79,41 +84,119 @@ Future<void> showRepoMenu({
   final p = Theming.of(context);
   // Passed down by hand: the menu is a new route, and Theming isn't an
   // InheritedTheme, so it doesn't follow the menu there.
-  final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+  final navigator = Navigator.of(context);
+  final overlay = navigator.overlay!.context.findRenderObject() as RenderBox;
   // The tick column is only reserved in menus that tick something, or every
   // plain menu would carry a blank gutter.
   final hasChecks = items.any((i) => i.checked);
 
-  final picked = await showMenu<MenuAction>(
-    context: context,
-    color: p.bgElev,
-    surfaceTintColor: Colors.transparent,
-    elevation: 6,
-    menuPadding: const EdgeInsets.all(4),
-    constraints: const BoxConstraints(minWidth: 140, maxWidth: 420),
-    shape: RoundedRectangleBorder(
-      side: BorderSide(color: p.border),
-      borderRadius: BorderRadius.circular(6),
-    ),
-    // alignRight: left > right makes showMenu grow leftwards with its right
-    // edge on position.dx — the split button's chevron, whose menu belongs
-    // under the button, not hanging off past it.
-    position: alignRight
-        ? RelativeRect.fromLTRB(overlay.size.width, position.dy,
-            overlay.size.width - position.dx, overlay.size.height - position.dy)
-        : RelativeRect.fromRect(
-            Rect.fromLTWH(position.dx, position.dy, 0, 0),
-            Offset.zero & overlay.size,
-          ),
-    items: [
+  final picked = await navigator.push(_MenuRoute(
+    anchor: overlay.globalToLocal(position),
+    alignRight: alignRight,
+    palette: p,
+    entries: [
       for (var i = 0; i < items.length; i++)
         items[i].header
             ? _MenuHeader(items[i].label, palette: p, first: i == 0)
             : _MenuRow(items[i], palette: p, hasChecks: hasChecks),
     ],
-  );
+  ));
 
   picked?.onTap();
+}
+
+class _MenuRoute extends PopupRoute<MenuAction> {
+  _MenuRoute({
+    required this.anchor,
+    required this.alignRight,
+    required this.palette,
+    required this.entries,
+  });
+
+  final Offset anchor;
+  final bool alignRight;
+  final Palette palette;
+  final List<Widget> entries;
+
+  @override
+  Color? get barrierColor => null;
+
+  @override
+  bool get barrierDismissible => true;
+
+  @override
+  String? get barrierLabel => '关闭菜单';
+
+  @override
+  Duration get transitionDuration => const Duration(milliseconds: 100);
+
+  @override
+  Widget buildPage(BuildContext context, Animation<double> animation,
+      Animation<double> secondaryAnimation) {
+    final p = palette;
+    return CustomSingleChildLayout(
+      delegate: _MenuLayout(anchor, alignRight),
+      child: FadeTransition(
+        opacity: animation,
+        child: Material(
+          color: p.bgElev,
+          surfaceTintColor: Colors.transparent,
+          elevation: 6,
+          clipBehavior: Clip.antiAlias,
+          shape: RoundedRectangleBorder(
+            side: BorderSide(color: p.border),
+            borderRadius: BorderRadius.circular(6),
+          ),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(minWidth: 140, maxWidth: 420),
+            child: IntrinsicWidth(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(4),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: entries,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Centred on the anchor horizontally (right edge on it for alignRight); below
+/// it when the menu fits, else above it. Either way kept 8px inside the
+/// window, which slides a menu opened near an edge back in.
+class _MenuLayout extends SingleChildLayoutDelegate {
+  _MenuLayout(this.anchor, this.alignRight);
+
+  final Offset anchor;
+  final bool alignRight;
+
+  static const _margin = 8.0;
+
+  @override
+  BoxConstraints getConstraintsForChild(BoxConstraints constraints) =>
+      BoxConstraints.loose(constraints.biggest)
+          .deflate(const EdgeInsets.all(_margin));
+
+  @override
+  Offset getPositionForChild(Size size, Size childSize) {
+    final x = alignRight
+        ? anchor.dx - childSize.width
+        : anchor.dx - childSize.width / 2;
+    final fitsBelow = anchor.dy + childSize.height <= size.height - _margin;
+    final y = fitsBelow ? anchor.dy : anchor.dy - childSize.height;
+    return Offset(
+      x.clamp(_margin, max(_margin, size.width - childSize.width - _margin)),
+      y.clamp(_margin, max(_margin, size.height - childSize.height - _margin)),
+    );
+  }
+
+  @override
+  bool shouldRelayout(_MenuLayout old) =>
+      old.anchor != anchor || old.alignRight != alignRight;
 }
 
 class _MenuHeader extends PopupMenuEntry<MenuAction> {

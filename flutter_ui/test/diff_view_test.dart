@@ -1,4 +1,5 @@
 import 'package:cgit_flutter/diff_view.dart';
+import 'package:cgit_flutter/git_text.dart';
 import 'package:cgit_flutter/theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -131,5 +132,22 @@ void main() {
       const DiffPane(hunks: [], mode: DiffMode.split),
     ));
     expect(find.text('没有文本差异'), findsOneWidget);
+  });
+
+  testWidgets('every change block key is attached, so ↑/↓ can scroll to it',
+      (tester) async {
+    for (final mode in DiffMode.values) {
+      final keys = {
+        for (final row in changeBlockRows(hunk, split: mode == DiffMode.split))
+          '0:$row': GlobalKey(),
+      };
+      expect(keys, isNotEmpty);
+      await tester.pumpWidget(_host(
+        DiffPane(hunks: const [hunk], mode: mode, blockKeys: keys),
+      ));
+      for (final key in keys.values) {
+        expect(key.currentContext, isNotNull, reason: '$mode');
+      }
+    }
   });
 }

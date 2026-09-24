@@ -449,6 +449,10 @@ class Git {
   Future<String> stashSave({String message = ''}) =>
       _guard(() => rust.stashSave(path: repo, message: message));
 
+  /// Stash only the staged files; cgit-core refuses partly staged ones.
+  Future<String> stashStaged({String message = ''}) =>
+      _guard(() => rust.stashStaged(path: repo, message: message));
+
   /// Apply and remove in one step, which is what "pop" means to git.
   Future<String> stashPop(int index) =>
       _guard(() => rust.stashPop(path: repo, index: BigInt.from(index)));

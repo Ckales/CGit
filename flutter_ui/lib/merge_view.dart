@@ -429,11 +429,15 @@ class _MergeWindowState extends State<MergeWindow> {
           offset: Offset(-_scrollX, 0),
           child: Align(
             alignment: Alignment.topLeft,
-            child: Text(
-              text,
-              softWrap: false,
-              maxLines: null,
-              style: mono.copyWith(color: dim ? p.textDim : p.text),
+            // Per block, not around the whole grid: one area spanning the rows
+            // would drag a selection across all three columns.
+            child: SelectionArea(
+              child: Text(
+                text,
+                softWrap: false,
+                maxLines: null,
+                style: mono.copyWith(color: dim ? p.textDim : p.text),
+              ),
             ),
           ),
         ),
@@ -564,8 +568,8 @@ class _GutterButton extends StatelessWidget {
         child: GestureDetector(
           onTap: onTap,
           child: Container(
-            width: 18,
-            height: 18,
+            width: 22,
+            height: 22,
             margin: const EdgeInsets.all(1),
             alignment: Alignment.center,
             decoration: BoxDecoration(
@@ -573,18 +577,61 @@ class _GutterButton extends StatelessWidget {
               border: Border.all(color: p.border),
               borderRadius: BorderRadius.circular(3),
             ),
-            child: Text(
-              label,
-              style: ui.copyWith(
-                fontSize: 11,
-                color: active ? const Color(0xFFFFFFFF) : p.text,
-              ),
+            // Drawn, not typed: at any font size » came out a fraction of ✕.
+            child: CustomPaint(
+              size: const Size(14, 14),
+              painter: _GutterGlyph(
+                  label, active ? const Color(0xFFFFFFFF) : p.text),
             ),
           ),
         ),
       ),
     );
   }
+}
+
+/// » « ✕ on a 14px square, 1.6px strokes.
+class _GutterGlyph extends CustomPainter {
+  _GutterGlyph(this.label, this.color);
+  final String label;
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final path = Path();
+    if (label == '✕') {
+      path
+        ..moveTo(3, 3)
+        ..lineTo(11, 11)
+        ..moveTo(11, 3)
+        ..lineTo(3, 11);
+    } else {
+      // Two chevrons pointing right; « is the same mirrored.
+      for (final x in [2.5, 7.5]) {
+        path
+          ..moveTo(x, 2.5)
+          ..lineTo(x + 4.5, 7)
+          ..lineTo(x, 11.5);
+      }
+      if (label == '«') {
+        canvas.translate(size.width, 0);
+        canvas.scale(-1, 1);
+      }
+    }
+    canvas.drawPath(
+      path,
+      Paint()
+        ..color = color
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.6
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_GutterGlyph old) =>
+      old.label != label || old.color != color;
 }
 
 class _IconText extends StatelessWidget {

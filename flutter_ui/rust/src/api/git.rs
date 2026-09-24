@@ -305,6 +305,10 @@ pub fn stash_save(path: String, message: String) -> Result<String, String> {
     cgit_core::stash_save(path, message)
 }
 
+pub fn stash_staged(path: String, message: String) -> Result<String, String> {
+    cgit_core::stash_staged(path, message)
+}
+
 pub fn stash_list(path: String) -> Result<Vec<cgit_core::StashEntry>, String> {
     cgit_core::stash_list(path)
 }

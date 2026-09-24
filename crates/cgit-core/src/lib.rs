@@ -1322,6 +1322,34 @@ pub fn stash_save(path: String, message: String) -> Result<String, String> {
     }
 }
 
+/// Stash only what is staged (the files ticked in the commit sheet); unticked
+/// files stay in the worktree.
+pub fn stash_staged(path: String, message: String) -> Result<String, String> {
+    // `--staged` cannot split a file whose staged and unstaged edits touch the
+    // same lines: git saves the stash, then fails to reset the worktree, and
+    // the work ends up in two places. Refuse partly staged files up front.
+    let staged = run_git(&path, &["diff", "--cached", "--name-only", "-z"])?;
+    let unstaged = run_git(&path, &["diff", "--name-only", "-z"])?;
+    let unstaged_files: Vec<&str> = unstaged.split('\0').collect();
+    let mut mixed = Vec::new();
+    for file in staged.split('\0') {
+        if !file.is_empty() && unstaged_files.contains(&file) {
+            mixed.push(file);
+        }
+    }
+    if !mixed.is_empty() {
+        return Err(format!(
+            "{} 同时有已暂存和未暂存的改动，请先整个暂存或取消暂存再储藏",
+            mixed.join("、")
+        ));
+    }
+    if message.trim().is_empty() {
+        run_git(&path, &["stash", "push", "--staged"])
+    } else {
+        run_git(&path, &["stash", "push", "--staged", "-m", message.as_str()])
+    }
+}
+
 pub fn stash_list(path: String) -> Result<Vec<StashEntry>, String> {
     let out = run_git(&path, &["stash", "list"])?;
     let mut list = Vec::new();
@@ -2676,6 +2704,48 @@ mod tests {
         run_git(&path, &["add", "f"]).unwrap();
         run_git(&path, &["commit", "-qm", "base"]).unwrap();
         path
+    }
+
+    #[test]
+    fn stash_staged_takes_ticked_files_only() {
+        let path = temp_repo("stash-staged");
+        let dir = std::path::Path::new(&path);
+        std::fs::write(dir.join("g"), "g").unwrap();
+        run_git(&path, &["add", "g"]).unwrap();
+        run_git(&path, &["commit", "-qm", "g"]).unwrap();
+
+        // f: modified; g → h: renamed; n: new; u: unticked, stays put.
+        std::fs::write(dir.join("f"), "staged").unwrap();
+        run_git(&path, &["add", "f"]).unwrap();
+        run_git(&path, &["mv", "g", "h"]).unwrap();
+        std::fs::write(dir.join("n"), "n").unwrap();
+        run_git(&path, &["add", "n"]).unwrap();
+        std::fs::write(dir.join("u"), "u").unwrap();
+
+        stash_staged(path.clone(), "勾选的文件".into()).unwrap();
+
+        let status = run_git(&path, &["status", "--porcelain"]).unwrap();
+        assert_eq!(status, "?? u\n");
+        let stashed = run_git(&path, &["stash", "show", "--name-status"]).unwrap();
+        assert!(stashed.contains("M\tf"), "{stashed}");
+        assert!(stashed.contains("R100\tg\th"), "{stashed}");
+        assert!(stashed.contains("A\tn"), "{stashed}");
+        assert!(stash_list(path).unwrap()[0].message.contains("勾选的文件"));
+    }
+
+    #[test]
+    fn stash_staged_refuses_a_partly_staged_file() {
+        let path = temp_repo("stash-staged-mixed");
+        let dir = std::path::Path::new(&path);
+        std::fs::write(dir.join("f"), "staged").unwrap();
+        run_git(&path, &["add", "f"]).unwrap();
+        std::fs::write(dir.join("f"), "staged+more").unwrap();
+
+        let err = stash_staged(path.clone(), String::new()).unwrap_err();
+        assert!(err.starts_with("f 同时有"), "{err}");
+        // Refused before git ran: no stray stash, worktree untouched.
+        assert!(stash_list(path.clone()).unwrap().is_empty());
+        assert_eq!(std::fs::read_to_string(dir.join("f")).unwrap(), "staged+more");
     }
 
     /// A clone of a bare remote with one shared commit, i.e. a repo whose

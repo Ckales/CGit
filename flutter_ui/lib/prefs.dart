@@ -25,6 +25,7 @@ class Prefs {
   static const _keyProjectEditors = 'cgit.projectEditors';
   static const _keyRecentRepos = 'cgit.recentRepos';
   static const _keyOpLog = 'cgit.opLog';
+  static const _keyFlatChanges = 'cgit.flatChanges';
 
   /// How many repositories the 打开 menu remembers. Beyond this the list stops
   /// being a shortcut and becomes something to read.
@@ -40,6 +41,11 @@ class Prefs {
   bool get isDark => _store.getString(_keyTheme) != 'light';
   Future<void> setDark(bool dark) =>
       _store.setString(_keyTheme, dark ? 'dark' : 'light');
+
+  /// The commit sheet's change list: flat paths instead of a folder tree.
+  bool get isFlatChanges => _store.getBool(_keyFlatChanges) ?? false;
+  Future<void> setFlatChanges(bool flat) =>
+      _store.setBool(_keyFlatChanges, flat);
 
   bool get isSplitDiff => _store.getString(_keyDiffView) != 'unified';
   Future<void> setSplitDiff(bool split) =>

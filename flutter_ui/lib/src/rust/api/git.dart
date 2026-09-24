@@ -166,6 +166,9 @@ Future<void> applyHunk(
 Future<String> stashSave({required String path, required String message}) =>
     RustLib.instance.api.crateApiGitStashSave(path: path, message: message);
 
+Future<String> stashStaged({required String path, required String message}) =>
+    RustLib.instance.api.crateApiGitStashStaged(path: path, message: message);
+
 Future<List<StashEntry>> stashList({required String path}) =>
     RustLib.instance.api.crateApiGitStashList(path: path);
 

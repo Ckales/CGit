@@ -2057,6 +2057,7 @@ class _RepoScreenState extends State<RepoScreen> {
         onCommitAndPush: _pushRepos,
         onCreatePatch: _createWorkingPatch,
         ai: _ai,
+        prefs: widget.prefs,
         docked: docked,
       );
 

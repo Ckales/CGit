@@ -69,6 +69,16 @@ class _FakeGit implements Git {
   }
 
   @override
+  Future<String> stashStaged({String message = ''}) async {
+    log.add('$repo:stash:$message');
+    return '';
+  }
+
+  @override
+  Future<Identity> identity() async =>
+      Identity(name: 'Ada', email: 'ada@${repo.split('/').last}.dev');
+
+  @override
   dynamic noSuchMethod(Invocation i) =>
       throw UnsupportedError('${i.memberName} not needed here');
 }
@@ -115,6 +125,23 @@ void main() {
           matching: find.byType(Opacity)));
       expect(dimmed.opacity, 0.45);
     });
+  });
+
+  testWidgets('平铺 lists full paths without folder rows, and toggles back',
+      (tester) async {
+    await tester.pumpWidget(_host(_sheet()));
+    expect(find.text('src  2 个文件'), findsOneWidget);
+    expect(find.text('main.js'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('切换为平铺列表'));
+    await tester.pump();
+    expect(find.text('src  2 个文件'), findsNothing);
+    expect(find.text('src/main.js'), findsOneWidget);
+    expect(find.text('src/styles.css'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('切换为树形结构'));
+    await tester.pump();
+    expect(find.text('src  2 个文件'), findsOneWidget);
   });
 
   testWidgets('the commit box renders a real input, not an error block',
@@ -257,6 +284,18 @@ void main() {
       )));
     }
 
+    testWidgets('the author field shows the active repo\'s git identity',
+        (tester) async {
+      await pump(tester);
+      await tester.pump();
+      expect(find.text('Ada <ada@api.dev>'), findsOneWidget);
+      // It once shared the checkbox row and was squeezed to a few characters;
+      // on its own row it spans the 360px column.
+      final field = find.ancestor(
+          of: find.text('Ada <ada@api.dev>'), matching: find.byType(TextField));
+      expect(tester.getSize(field).width, greaterThan(300));
+    });
+
     testWidgets('lists one tree per repo', (tester) async {
       await pump(tester);
       expect(find.text('admin  1 个文件'), findsOneWidget);
@@ -273,6 +312,18 @@ void main() {
 
       expect(log, ['/w/admin:commit:feat: x', '/w/front:commit:feat: x']);
       expect(closed, isTrue);
+    });
+
+    testWidgets('储藏 stashes every repo with something ticked, and only those',
+        (tester) async {
+      await pump(tester);
+      await tester.enterText(_messageBox, 'wip: x');
+      await tester.tap(find.text('储藏'));
+      await tester.pumpAndSettle();
+
+      expect(log, ['/w/admin:stash:wip: x', '/w/front:stash:wip: x']);
+      // Unticked files are still there to commit, so the sheet stays up.
+      expect(closed, isFalse);
     });
 
     testWidgets('提交并推送 pushes the repos it committed', (tester) async {

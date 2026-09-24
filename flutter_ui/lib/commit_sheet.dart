@@ -4,6 +4,7 @@ import 'ai_settings.dart';
 import 'context_menu.dart';
 import 'git.dart';
 import 'git_text.dart';
+import 'prefs.dart';
 import 'theme.dart';
 
 /// One repo's rows in the change tree.
@@ -34,9 +35,13 @@ class CommitSheet extends StatefulWidget {
     this.menuFor,
     this.onDiscard,
     this.ai,
+    this.prefs,
     this.docked = false,
     this.gitFor = Git.new,
   });
+
+  /// Remembers 树形 / 平铺. Tests leave it out and get the tree.
+  final Prefs? prefs;
 
   /// Inline under the history, scoped to the repo picked in the sidebar — the
   /// Tauri docked commit panel — instead of a dialog over the window.
@@ -92,11 +97,47 @@ class _CommitSheetState extends State<CommitSheet> {
   bool _signoff = false;
   bool _generating = false;
 
+  /// The identity git will commit as when the author field is left empty,
+  /// shown as that field's hint.
+  String _identity = '正在读取当前 Git 身份…';
+
   /// Folded tree nodes, keyed like the Tauri `collapsedChangeNodes`. Kept
   /// across refreshes so staging a file does not reopen what was folded.
   final _collapsed = <String>{};
 
+  /// 平铺：each file on one row under its repo, labelled by its full path.
+  late bool _flat = widget.prefs?.isFlatChanges ?? false;
+
   Git get _activeGit => widget.gitFor(widget.active.path);
+
+  @override
+  void initState() {
+    super.initState();
+    _loadIdentity();
+  }
+
+  @override
+  void didUpdateWidget(CommitSheet old) {
+    super.didUpdateWidget(old);
+    if (old.active.path != widget.active.path) _loadIdentity();
+  }
+
+  Future<void> _loadIdentity() async {
+    final path = widget.active.path;
+    String text;
+    try {
+      final id = await widget.gitFor(path).identity();
+      text = id.name.isNotEmpty && id.email.isNotEmpty
+          ? '${id.name} <${id.email}>'
+          : id.name.isNotEmpty || id.email.isNotEmpty
+              ? '${id.name}${id.email}'
+              : '未配置 Git 身份';
+    } on GitError {
+      text = '未读取到 Git 身份';
+    }
+    // A slower read for the previously active repo must not overwrite this one.
+    if (mounted && path == widget.active.path) setState(() => _identity = text);
+  }
 
   @override
   void dispose() {
@@ -196,6 +237,20 @@ class _CommitSheetState extends State<CommitSheet> {
       final git = widget.gitFor(g.repo.path);
       if (stage && g.changes.any((f) => !f.staged)) await git.stageAll();
       if (!stage && g.changes.any((f) => f.staged)) await git.unstageAll();
+    }
+  }
+
+  /// 储藏勾选的文件：每个有勾选的仓库各储藏一次，遇到失败即停。
+  Future<void> _stashStaged() async {
+    final message = _message.text.trim();
+    for (final g in widget.groups) {
+      if (!g.changes.any((f) => f.staged)) continue;
+      try {
+        await widget.gitFor(g.repo.path).stashStaged(message: message);
+      } on GitError catch (e) {
+        if (widget.groups.length == 1) rethrow;
+        throw GitError('${g.repo.name}：${e.message}');
+      }
     }
   }
 
@@ -389,25 +444,44 @@ class _CommitSheetState extends State<CommitSheet> {
                 onChanged: (_) => setState(() {}),
               ),
             ),
-            const SizedBox(width: 8),
+            const SizedBox(width: 6),
+            _Btn(
+              tooltip: _flat ? '切换为树形结构' : '切换为平铺列表',
+              icon: true,
+              onTap: () {
+                setState(() => _flat = !_flat);
+                widget.prefs?.setFlatChanges(_flat);
+              },
+              child: _flat
+                  ? _Glyph.tree(color: p.text)
+                  : _Glyph.list(color: p.text),
+            ),
+            const SizedBox(width: 6),
             _Btn(
               tooltip: '暂存全部',
               icon: true,
               onTap: _busy || _unstaged.isEmpty
                   ? null
                   : () => _run(() => _stageEverything(stage: true)),
-              child: _label(p, '＋全部'),
+              child: _label(p, '＋全部', size: 11),
             ),
-            const SizedBox(width: 8),
+            const SizedBox(width: 6),
             _Btn(
               tooltip: '取消暂存全部',
               icon: true,
               onTap: _busy || _staged.isEmpty
                   ? null
                   : () => _run(() => _stageEverything(stage: false)),
-              child: _label(p, '−全部'),
+              child: _label(p, '−全部', size: 11),
             ),
-            const SizedBox(width: 8),
+            const SizedBox(width: 6),
+            _Btn(
+              tooltip: '储藏勾选的文件，提交说明有内容时用作储藏说明',
+              icon: true,
+              onTap: _busy || _staged.isEmpty ? null : () => _run(_stashStaged),
+              child: _label(p, '储藏', size: 11),
+            ),
+            const SizedBox(width: 6),
             _Btn(
               tooltip: '把 ${widget.active.name} 的本地改动导出成补丁（右键复制到剪贴板）',
               icon: true,
@@ -417,7 +491,7 @@ class _CommitSheetState extends State<CommitSheet> {
               onSecondaryTap: _busy || !hasChanges
                   ? null
                   : () => widget.onCreatePatch(toClipboard: true),
-              child: _label(p, '补丁'),
+              child: _label(p, '补丁', size: 11),
             ),
           ],
         ),
@@ -488,6 +562,10 @@ class _CommitSheetState extends State<CommitSheet> {
     }
     final root = pathTree(leaves, collapseSingleChild: false);
 
+    String label(FileStatus f, String name) => (occurrences[f.path] ?? 0) > 1
+        ? '$name · ${f.staged ? '已暂存' : '未暂存'}'
+        : name;
+
     final rows = <Widget>[];
     void addNode(TreeNode node, String parent, int depth) {
       for (final dir in node.dirs) {
@@ -529,15 +607,7 @@ class _CommitSheetState extends State<CommitSheet> {
       for (final leaf in node.files) {
         final f = byLeaf[leaf]!;
         final name = f.path.split('/').last;
-        rows.add(_fileRow(
-          p,
-          repo,
-          f,
-          depth,
-          (occurrences[f.path] ?? 0) > 1
-              ? '$name · ${f.staged ? '已暂存' : '未暂存'}'
-              : name,
-        ));
+        rows.add(_fileRow(p, repo, f, depth, label(f, name)));
       }
     }
 
@@ -573,7 +643,13 @@ class _CommitSheetState extends State<CommitSheet> {
         ],
       ],
     ));
-    if (rootOpen) addNode(root, '', 1);
+    if (rootOpen && _flat) {
+      for (final f in files) {
+        rows.add(_fileRow(p, repo, f, 1, label(f, f.path)));
+      }
+    } else if (rootOpen) {
+      addNode(root, '', 1);
+    }
     return rows;
   }
 
@@ -679,14 +755,20 @@ class _CommitSheetState extends State<CommitSheet> {
               value: _signoff,
               onChanged: _busy ? null : (v) => setState(() => _signoff = v),
             ),
-            const SizedBox(width: 14),
+          ],
+        ),
+        const SizedBox(height: 8),
+        // Its own row: the column is 360px wide, and next to the checkboxes or
+        // the buttons the identity hint was cut to a few characters.
+        Row(
+          children: [
             Text('作者', style: ui.copyWith(color: p.textDim, fontSize: 11)),
             const SizedBox(width: 6),
             Expanded(
               child: Tooltip(
-                message: '覆盖本次提交的作者，留空则用 git 配置',
+                message: '当前 Git 身份：$_identity；填写后仅覆盖本次提交',
                 waitDuration: const Duration(milliseconds: 600),
-                child: _Field(controller: _author, hint: '名字 <邮箱>'),
+                child: _Field(controller: _author, hint: _identity),
               ),
             ),
           ],
@@ -1260,6 +1342,35 @@ class _Glyph extends StatelessWidget {
         ..moveTo(8, 4.5)
         ..lineTo(8, 8)
         ..lineTo(10.5, 9.5),
+      color,
+      1.3);
+
+  /// 平铺: three equal lines, 1.3 wide.
+  factory _Glyph.list({required Color color}) => _Glyph._(
+      (path) => path
+        ..moveTo(3, 4)
+        ..lineTo(13, 4)
+        ..moveTo(3, 8)
+        ..lineTo(13, 8)
+        ..moveTo(3, 12)
+        ..lineTo(13, 12),
+      color,
+      1.3);
+
+  /// 树形: a parent line and two indented children on a connector, 1.3 wide.
+  factory _Glyph.tree({required Color color}) => _Glyph._(
+      (path) => path
+        ..moveTo(2.5, 4)
+        ..lineTo(13, 4)
+        ..moveTo(4, 5.5)
+        ..lineTo(4, 12)
+        ..lineTo(5.5, 12)
+        ..moveTo(4, 8)
+        ..lineTo(5.5, 8)
+        ..moveTo(7.5, 8)
+        ..lineTo(13, 8)
+        ..moveTo(7.5, 12)
+        ..lineTo(13, 12),
       color,
       1.3);
 

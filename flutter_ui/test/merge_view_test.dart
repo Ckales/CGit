@@ -1,6 +1,8 @@
 import 'package:cgit_flutter/merge_view.dart';
 import 'package:cgit_flutter/theme.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// The merge window decides what gets written into the user's file, so these
@@ -265,4 +267,39 @@ void main() {
     expect(h.closed, isTrue);
     expect(h.saved, isNull);
   });
+
+  testWidgets('both sides can be selected and copied', (tester) async {
+    await tester.pumpWidget(_host(_Harness(), conflicted));
+    for (final text in ['ours one\nours two', 'theirs one', 'head line']) {
+      expect(
+          find.ancestor(
+              of: find.text(text).first, matching: find.byType(SelectionArea)),
+          findsOneWidget,
+          reason: text);
+    }
+
+    // Drag across the theirs block and copy: the clipboard gets its text.
+    String? copied;
+    tester.binding.defaultBinaryMessenger
+        .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+      if (call.method == 'Clipboard.setData') {
+        copied = (call.arguments as Map)['text'] as String;
+      }
+      return null;
+    });
+    final theirs = find.text('theirs one').first;
+    final box = tester.getRect(theirs);
+    final gesture = await tester.startGesture(box.centerLeft + const Offset(1, 0),
+        kind: PointerDeviceKind.mouse);
+    await tester.pump();
+    await gesture.moveTo(box.centerRight - const Offset(1, 0));
+    await tester.pump();
+    await gesture.up();
+    await tester.pump();
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.meta);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyC);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.meta);
+    await tester.pump();
+    expect(copied, 'theirs one');
+  }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
 }

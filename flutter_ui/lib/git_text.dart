@@ -646,6 +646,26 @@ AuthFailure? authFailureInfo(String stderr) {
 
 bool isAuthFailure(String stderr) => authFailureInfo(stderr) != null;
 
+/// The one line of a git failure worth putting in the status bar. git's stderr
+/// often opens with context ("To https://…", "hint: …") and puts the reason
+/// later, so a rejected ref or a fatal/error line wins over the first line.
+String errorSummary(String stderr) {
+  final lines = [
+    for (final l in stderr.split('\n'))
+      if (l.trim().isNotEmpty) l.trim(),
+  ];
+  if (lines.isEmpty) return '';
+  for (final l in lines) {
+    if (l.contains('[remote rejected]') || l.contains('[rejected]')) {
+      return l.startsWith('! ') ? l.substring(2) : l;
+    }
+  }
+  for (final l in lines) {
+    if (l.startsWith('fatal:') || l.startsWith('error:')) return l;
+  }
+  return lines.first;
+}
+
 /// Decide whether the combined credential button can reuse the current helper
 /// entry or needs a new token. The token itself never leaves the input field.
 String credentialAction({

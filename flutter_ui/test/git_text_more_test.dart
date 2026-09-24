@@ -396,4 +396,21 @@ void _blocks() {
       expect(split.length, 2, reason: 'still two runs, different row numbers');
     });
   });
+
+  group('errorSummary', () {
+    test('prefers the rejected ref over the leading "To <url>" line', () {
+      const stderr = 'To https://github.com/Ckales/CTerminal.git\n'
+          ' ! [remote rejected] main -> main (refusing to allow a Personal Access '
+          'Token to create or update workflow `.github/workflows/ci.yml` without '
+          '`workflow` scope)\n'
+          "error: failed to push some refs to 'https://github.com/Ckales/CTerminal.git'\n";
+      expect(errorSummary(stderr), startsWith('[remote rejected] main -> main'));
+    });
+
+    test('falls back to fatal/error, then the first line', () {
+      expect(errorSummary('hint: x\nfatal: not a git repository\n'),
+          'fatal: not a git repository');
+      expect(errorSummary('\n  路径不存在：/x \n'), '路径不存在：/x');
+    });
+  });
 }

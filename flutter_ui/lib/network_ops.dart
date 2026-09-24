@@ -16,18 +16,29 @@ String? strategyArg(UpdateStrategy? s) => switch (s) {
       UpdateStrategy.rebase => 'rebase',
     };
 
-/// git's own words for a dead credential ("could not read Username…") do not
-/// say what to do about it, so those get a sentence added. Everything else is
-/// passed through — git explains its own failures better than we can.
-String networkErrorText(String raw) {
+/// git's own words for a few failures ("could not read Username…", a PAT
+/// without `workflow` scope) do not say what to do about them, so those get a
+/// sentence. Null for everything else — git explains its own failures better
+/// than we can, and the raw text is always shown alongside.
+String? networkErrorHint(String raw) {
   final text = raw.trim();
+  // GitHub refuses a push that touches .github/workflows unless the token has
+  // the `workflow` scope; the file it names is the one that tripped it.
+  final workflow = RegExp(
+          r'refusing to allow an? (?:Personal Access Token|OAuth App) to create or update workflow `([^`]+)`')
+      .firstMatch(text);
+  if (workflow != null) {
+    return '推送被 GitHub 拒绝：当前 Token 没有 workflow 权限，不能修改 ${workflow[1]}。'
+        '请在 GitHub 给该 Token 勾选 workflow（细粒度 Token 为 Workflows: Read and write），'
+        '再到设置 → Git 信息 → 远程认证重新保存';
+  }
   final auth = authFailureInfo(text);
-  if (auth == null) return text;
+  if (auth == null) return null;
   if (auth.kind == 'github-403') {
     return 'GitHub 当前使用账号 ${auth.username}，没有该仓库的推送权限。'
-        '请到设置 → Git 信息 → 远程认证切换账号 — $text';
+        '请到设置 → Git 信息 → 远程认证切换账号';
   }
-  return '远程认证失败，请到设置 → Git 信息 → 远程认证检查凭据 — $text';
+  return '远程认证失败，请到设置 → Git 信息 → 远程认证检查凭据';
 }
 
 /// IDEA's wording for where a push lands: `main → origin : main`.

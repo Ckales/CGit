@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -5,6 +7,7 @@ import 'ai_settings.dart';
 import 'context_menu.dart';
 import 'git.dart';
 import 'git_text.dart';
+import 'op_log.dart';
 import 'prefs.dart';
 import 'theme.dart';
 
@@ -57,6 +60,7 @@ class _SettingsSheetState extends State<SettingsSheet> {
   /* ---------- 通用 ---------- */
   late String _pullStrategy = widget.prefs.pullStrategy;
   late int _pageSize = widget.prefs.historyPageSize;
+  late bool _opLog = widget.prefs.opLog;
 
   /* ---------- 外观 ---------- */
   late bool _dark = widget.prefs.isDark;
@@ -192,6 +196,7 @@ class _SettingsSheetState extends State<SettingsSheet> {
     final prefs = widget.prefs;
     await prefs.setPullStrategy(_pullStrategy);
     await prefs.setHistoryPageSize(_pageSize);
+    await prefs.setOpLog(_opLog);
     await prefs.setDark(_dark);
     await prefs.setFontSize(_fontSize);
     await prefs.setSplitDiff(_split);
@@ -503,7 +508,37 @@ class _SettingsSheetState extends State<SettingsSheet> {
             (v) => setState(() => _pageSize = int.parse(v)),
           ),
         ),
+        _row(
+          p,
+          '记录操作日志',
+          Row(
+            children: [
+              MouseRegion(
+                cursor: SystemMouseCursors.click,
+                child: GestureDetector(
+                  onTap: () => setState(() => _opLog = !_opLog),
+                  child: _checkbox(p, _opLog),
+                ),
+              ),
+              const Spacer(),
+              _button(p, '打开日志目录', _openLogDir),
+            ],
+          ),
+        ),
+        _hint(
+            p,
+            '记录状态栏的每条消息和 git 报错原文，排查问题用，默认关闭。'
+            '写到 ${OpLog.path}，超过 5MB 轮转一次；远端地址里的账号和 Token 会替换成 <REDACTED>。'),
       ];
+
+  Future<void> _openLogDir() async {
+    try {
+      await Directory(OpLog.dir).create(recursive: true);
+      await Git(OpLog.dir).openProject();
+    } on GitError catch (e) {
+      if (mounted) _report(e.message, isError: true);
+    }
+  }
 
   /* ---------- 外观 ---------- */
 

@@ -146,23 +146,32 @@ void main() {
   });
 
   group('error wording', () {
-    test('passes non-credential failures through untouched', () {
+    test('adds nothing to failures git already explains', () {
       const hook = 'remote: error: hook declined to update refs/heads/main';
-      expect(networkErrorText(hook), hook);
+      expect(networkErrorHint(hook), isNull);
     });
 
     test('names the GitHub account that lacks permission', () {
       const stderr = 'remote: Permission to Ckales/CGit.git denied to someuser.\n'
           'fatal: unable to access: The requested URL returned error: 403';
-      final text = networkErrorText(stderr);
+      final text = networkErrorHint(stderr)!;
       expect(text, contains('someuser'));
       expect(text, contains('切换账号'));
     });
 
     test('points a generic credential failure at the settings screen', () {
-      final text = networkErrorText(authFailed);
-      expect(text, contains('远程认证失败'));
-      expect(text, contains(authFailed), reason: "git's own words are kept");
+      expect(networkErrorHint(authFailed), contains('远程认证失败'));
+    });
+
+    test('explains a token missing the workflow scope', () {
+      const stderr = 'To https://github.com/Ckales/CTerminal.git\n'
+          ' ! [remote rejected] main -> main (refusing to allow a Personal Access '
+          'Token to create or update workflow `.github/workflows/ci.yml` without '
+          '`workflow` scope)\n'
+          "error: failed to push some refs to 'https://github.com/Ckales/CTerminal.git'";
+      final text = networkErrorHint(stderr)!;
+      expect(text, contains('workflow 权限'));
+      expect(text, contains('.github/workflows/ci.yml'));
     });
   });
 

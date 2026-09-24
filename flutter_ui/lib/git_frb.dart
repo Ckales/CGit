@@ -3,6 +3,7 @@
 // own methods of the same name.
 import 'dart:typed_data';
 
+import 'op_log.dart';
 import 'src/rust/api/git.dart';
 import 'src/rust/api/git.dart' as rust;
 import 'src/rust/api/watch.dart' as watch_api;
@@ -53,7 +54,9 @@ Future<T> _guard<T>(Future<T> Function() call) async {
   } catch (e) {
     // Core returns Result<_, String>, and frb surfaces that String as the
     // thrown object — it is already the message meant for the user.
-    throw GitError(e is String ? e : e.toString());
+    final message = e is String ? e : e.toString();
+    OpLog.error(message);
+    throw GitError(message);
   }
 }
 

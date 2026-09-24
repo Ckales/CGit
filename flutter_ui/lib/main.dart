@@ -18,6 +18,7 @@ import 'git_text.dart';
 import 'history_view.dart';
 import 'merge_view.dart';
 import 'network_ops.dart';
+import 'op_log.dart';
 import 'prefs.dart';
 import 'dialogs.dart';
 import 'prompt.dart';
@@ -33,6 +34,7 @@ Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
   await initGitBridge();
   final prefs = await Prefs.load();
+  OpLog.enabled = prefs.opLog;
 
   // argv wins when given, then the most recently opened repo, then the working
   // directory — so relaunching lands where the user left off.
@@ -176,7 +178,31 @@ class _RepoScreenState extends State<RepoScreen> {
   /// recent list.
   String _workspaceRoot = '';
   String _branch = '';
-  String _status = '就绪';
+  String _statusText = '就绪';
+
+  /// Set while the status bar shows a failure: the full text behind the one
+  /// line, opened by clicking it.
+  String? _statusDetail;
+
+  /// Every status write goes through here, so a later success clears the red
+  /// state and the operation log sees each message.
+  String get _status => _statusText;
+  set _status(String v) {
+    _statusText = v;
+    _statusDetail = null;
+    OpLog.info(v);
+  }
+
+  /// A failure: one line in the status bar, the whole text a click away. git's
+  /// stderr is several lines and the reason is rarely the first.
+  void _fail(String detail, {String? summary}) {
+    final line = summary ?? errorSummary(detail);
+    OpLog.error(line);
+    setState(() {
+      _statusText = line;
+      _statusDetail = detail.trim();
+    });
+  }
 
   List<BranchInfo> _branches = const [];
   List<String> _tags = const [];
@@ -303,6 +329,7 @@ class _RepoScreenState extends State<RepoScreen> {
     setState(() {
       _settingsOpen = false;
       _mode = widget.prefs.isSplitDiff ? DiffMode.split : DiffMode.unified;
+      OpLog.enabled = widget.prefs.opLog;
       _status = '设置已保存';
     });
     await _loadEditorIcons();
@@ -346,14 +373,14 @@ class _RepoScreenState extends State<RepoScreen> {
       final found = await git.searchCommits(query: query, author: author);
       if (mounted) setState(() => _searchResults = found);
     } on GitError catch (e) {
-      if (mounted) setState(() => _status = e.message);
+      if (mounted) _fail(e.message);
     }
   }
 
   Future<void> _openRepo(String path) async {
     final workspace = await Git.discover(path);
     if (workspace == null || workspace.repos.isEmpty) {
-      setState(() => _status = '不是 Git 仓库：$path');
+      _fail('不是 Git 仓库：$path');
       return;
     }
     // A workspace can hold sibling repos; the sidebar picker for those is not
@@ -480,7 +507,7 @@ class _RepoScreenState extends State<RepoScreen> {
       locals = await git.branches();
       remotes = await git.remoteBranches();
     } on GitError catch (e) {
-      if (mounted) setState(() => _status = e.message);
+      if (mounted) _fail(e.message);
       return;
     }
     if (!mounted) return;
@@ -527,7 +554,7 @@ class _RepoScreenState extends State<RepoScreen> {
         setState(() => _workspaceRepos = _withRepoBranch(repo.path, branch));
       }
     } on GitError catch (e) {
-      if (mounted) setState(() => _status = e.message);
+      if (mounted) _fail(e.message);
       return;
     }
     if (!mounted) return;
@@ -623,7 +650,7 @@ class _RepoScreenState extends State<RepoScreen> {
       });
       await Future.wait([_reloadDiff(), _refreshRepoChanges()]);
     } on GitError catch (e) {
-      if (mounted) setState(() => _status = e.message);
+      if (mounted) _fail(e.message);
     }
   }
 
@@ -759,7 +786,7 @@ class _RepoScreenState extends State<RepoScreen> {
         });
       }
     } on GitError catch (e) {
-      if (mounted) setState(() => _status = e.message);
+      if (mounted) _fail(e.message);
     }
   }
 
@@ -808,7 +835,7 @@ class _RepoScreenState extends State<RepoScreen> {
         _rebasePlan = RebasePlan.fromTodo(todo);
       });
     } on GitError catch (e) {
-      if (mounted) setState(() => _status = e.message);
+      if (mounted) _fail(e.message);
     }
   }
 
@@ -857,7 +884,7 @@ class _RepoScreenState extends State<RepoScreen> {
         _status = '$file 的历史（${history.length} 条）';
       });
     } on GitError catch (e) {
-      if (mounted) setState(() => _status = e.message);
+      if (mounted) _fail(e.message);
     }
   }
 
@@ -869,7 +896,7 @@ class _RepoScreenState extends State<RepoScreen> {
       await git.copyToClipboard(patch);
       if (mounted) setState(() => _status = '已复制 ${_short(c)} 的补丁到剪贴板');
     } on GitError catch (e) {
-      if (mounted) setState(() => _status = e.message);
+      if (mounted) _fail(e.message);
     }
   }
 
@@ -903,7 +930,7 @@ class _RepoScreenState extends State<RepoScreen> {
       await _refresh();
       if (mounted) setState(() => _status = done);
     } on GitError catch (e) {
-      if (mounted) setState(() => _status = e.message);
+      if (mounted) _fail(e.message);
     }
   }
 
@@ -1070,7 +1097,7 @@ class _RepoScreenState extends State<RepoScreen> {
     try {
       await git.openInEditor(file, editor: widget.prefs.editor);
     } on GitError catch (e) {
-      if (mounted) setState(() => _status = e.message);
+      if (mounted) _fail(e.message);
     }
   }
 
@@ -1083,7 +1110,7 @@ class _RepoScreenState extends State<RepoScreen> {
         editor: _projectEditor,
       );
     } on GitError catch (e) {
-      if (mounted) setState(() => _status = e.message);
+      if (mounted) _fail(e.message);
     }
   }
 
@@ -1103,7 +1130,7 @@ class _RepoScreenState extends State<RepoScreen> {
       await _refresh();
       if (mounted) setState(() => _status = '已从$from应用补丁');
     } on GitError catch (e) {
-      if (mounted) setState(() => _status = e.message);
+      if (mounted) _fail(e.message);
     }
   }
 
@@ -1156,7 +1183,7 @@ class _RepoScreenState extends State<RepoScreen> {
       await git.savePatch(location.path, patch);
       if (mounted) setState(() => _status = '已导出补丁到 ${location.path}');
     } on GitError catch (e) {
-      if (mounted) setState(() => _status = e.message);
+      if (mounted) _fail(e.message);
     }
   }
 
@@ -1177,7 +1204,7 @@ class _RepoScreenState extends State<RepoScreen> {
       await git.savePatch(location.path, patch);
       if (mounted) setState(() => _status = '已导出补丁到 ${location.path}');
     } on GitError catch (e) {
-      if (mounted) setState(() => _status = e.message);
+      if (mounted) _fail(e.message);
     }
   }
 
@@ -1193,7 +1220,7 @@ class _RepoScreenState extends State<RepoScreen> {
         _target = BlameTarget(file);
       });
     } on GitError catch (e) {
-      if (mounted) setState(() => _status = e.message);
+      if (mounted) _fail(e.message);
     }
   }
 
@@ -1231,7 +1258,7 @@ class _RepoScreenState extends State<RepoScreen> {
       });
       await _reloadDiff();
     } on GitError catch (e) {
-      if (mounted) setState(() => _status = e.message);
+      if (mounted) _fail(e.message);
     }
   }
 
@@ -1255,7 +1282,7 @@ class _RepoScreenState extends State<RepoScreen> {
         setState(() => _status = out.trim().isEmpty ? '已$label' : out.trim());
       }
     } on GitError catch (e) {
-      if (mounted) setState(() => _status = e.message);
+      if (mounted) _fail(e.message);
     }
   }
 
@@ -1294,7 +1321,11 @@ class _RepoScreenState extends State<RepoScreen> {
       setState(() => _status = last == null ? '$label完成' : '$label完成。$last');
     } on GitError catch (e) {
       await _refresh();
-      if (mounted) setState(() => _status = networkErrorText(e.message));
+      if (mounted) {
+        final hint = networkErrorHint(e.message);
+        _fail(hint == null ? e.message : '$hint\n\n${e.message.trim()}',
+            summary: hint);
+      }
     } finally {
       if (mounted) setState(() => _netBusy = false);
     }
@@ -1389,7 +1420,7 @@ class _RepoScreenState extends State<RepoScreen> {
         _mergeContent = content;
       });
     } on GitError catch (e) {
-      if (mounted) setState(() => _status = e.message);
+      if (mounted) _fail(e.message);
     }
   }
 
@@ -1403,7 +1434,7 @@ class _RepoScreenState extends State<RepoScreen> {
       await _refresh();
       if (mounted) setState(() => _status = '已解决 $file');
     } on GitError catch (e) {
-      if (mounted) setState(() => _status = e.message);
+      if (mounted) _fail(e.message);
     }
   }
 
@@ -1419,7 +1450,7 @@ class _RepoScreenState extends State<RepoScreen> {
         setState(() => _status = '已采用${side == 'ours' ? '我方' : '对方'} — $file');
       }
     } on GitError catch (e) {
-      if (mounted) setState(() => _status = e.message);
+      if (mounted) _fail(e.message);
     }
   }
 
@@ -1444,7 +1475,7 @@ class _RepoScreenState extends State<RepoScreen> {
       final content = await git.readFile(file);
       if (mounted) setState(() => _mergeContent = content);
     } on GitError catch (e) {
-      if (mounted) setState(() => _status = e.message);
+      if (mounted) _fail(e.message);
     }
   }
 
@@ -1470,7 +1501,7 @@ class _RepoScreenState extends State<RepoScreen> {
     } on GitError catch (e) {
       // Refresh either way: the operation may have advanced before failing.
       await _refresh();
-      if (mounted) setState(() => _status = e.message);
+      if (mounted) _fail(e.message);
     }
   }
 
@@ -1510,7 +1541,7 @@ class _RepoScreenState extends State<RepoScreen> {
       setState(() => _status = reverse ? '已取消暂存所选行' : '已暂存所选行');
       await _refresh();
     } on GitError catch (e) {
-      if (mounted) setState(() => _status = e.message);
+      if (mounted) _fail(e.message);
     }
   }
 
@@ -1836,7 +1867,7 @@ class _RepoScreenState extends State<RepoScreen> {
     try {
       await _git!.openProject(editor: editor);
     } on GitError catch (e) {
-      if (mounted) setState(() => _status = e.message);
+      if (mounted) _fail(e.message);
     }
   }
 
@@ -2440,7 +2471,71 @@ class _RepoScreenState extends State<RepoScreen> {
         color: p.bgAlt,
         border: Border(top: BorderSide(color: p.border)),
       ),
-      child: Text(_status, style: ui.copyWith(color: p.textDim, fontSize: 11)),
+      child: _statusDetail == null
+          ? Text(_status,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: ui.copyWith(color: p.textDim, fontSize: 11))
+          : MouseRegion(
+              cursor: SystemMouseCursors.click,
+              child: GestureDetector(
+                onTap: _showStatusDetail,
+                child: Row(
+                  children: [
+                    Container(
+                      width: 13,
+                      height: 13,
+                      alignment: Alignment.center,
+                      decoration:
+                          BoxDecoration(color: p.red, shape: BoxShape.circle),
+                      child: const Text('!',
+                          style: TextStyle(
+                              fontSize: 9,
+                              fontWeight: FontWeight.w700,
+                              color: Color(0xFFFFFFFF),
+                              height: 1)),
+                    ),
+                    const SizedBox(width: 4),
+                    Flexible(
+                      child: Text(_status,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: ui.copyWith(color: p.red, fontSize: 11)),
+                    ),
+                    const SizedBox(width: 8),
+                    Text('查看详情',
+                        style: ui.copyWith(color: p.accent, fontSize: 11)),
+                  ],
+                ),
+              ),
+            ),
+    );
+  }
+
+  Future<void> _showStatusDetail() {
+    final detail = _statusDetail!;
+    return showAppDialog<void>(
+      context,
+      title: '操作失败',
+      badge: DialogBadge.danger,
+      maxWidth: 640,
+      body: SelectableText(
+        detail,
+        style: ui.copyWith(
+            color: Theming.of(context).textDim, fontSize: 12, height: 1.5),
+      ),
+      actions: [
+        DialogButton('复制', onTap: () {
+          Clipboard.setData(ClipboardData(text: detail));
+          Navigator.of(context).pop();
+        }),
+        DialogButton(
+          '确定',
+          kind: DialogButtonKind.primary,
+          autofocus: true,
+          onTap: () => Navigator.of(context).pop(),
+        ),
+      ],
     );
   }
 }

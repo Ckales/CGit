@@ -55,8 +55,8 @@ class MenuAction {
 /// anchors under the right edge instead, for [showRepoMenu]'s `alignRight`.
 Offset menuAnchorBelow(BuildContext context, {bool right = false}) {
   final box = context.findRenderObject() as RenderBox;
-  return box.localToGlobal(
-      Offset(right ? box.size.width : 0, box.size.height + 4));
+  return box
+      .localToGlobal(Offset(right ? box.size.width : 0, box.size.height + 4));
 }
 
 /// Show a context menu at a global position.

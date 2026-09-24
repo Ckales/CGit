@@ -24,6 +24,7 @@ class Prefs {
   static const _keyEditors = 'cgit.editors';
   static const _keyProjectEditors = 'cgit.projectEditors';
   static const _keyRecentRepos = 'cgit.recentRepos';
+  static const _keyOpLog = 'cgit.opLog';
 
   /// How many repositories the 打开 menu remembers. Beyond this the list stops
   /// being a shortcut and becomes something to read.
@@ -76,6 +77,10 @@ class Prefs {
   String get pullStrategy => _store.getString(_keyPullStrategy) ?? 'ff-only';
   Future<void> setPullStrategy(String v) =>
       _store.setString(_keyPullStrategy, v);
+
+  /// 操作日志开关，默认关。
+  bool get opLog => _store.getBool(_keyOpLog) ?? false;
+  Future<void> setOpLog(bool v) => _store.setBool(_keyOpLog, v);
 
   /* ---------- editors ---------- */
 

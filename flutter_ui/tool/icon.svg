@@ -20,10 +20,23 @@
        Stroke 24 with node radius 43 (down from 32 / 51.5) — thinned one step,
        which keeps the bbox centred (200−43 to 312+43 = 157 to 355) and is the
        lightest weight where the branch line still survives the 16px icon:
-       rendered side by side, 20 / 39 already breaks up at that size. -->
+       rendered side by side, 20 / 39 already breaks up at that size.
+
+       Colours match CTerminal and CData so the three read as one family in
+       the Dock: the same dark vertical-gradient plate and soft drop shadow,
+       with the mark in cream yellow #FFD666. -->
+  <defs>
+    <linearGradient id="plate" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#292B30"/>
+      <stop offset="1" stop-color="#121214"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="6" stdDeviation="7.2" flood-color="#000000" flood-opacity="0.35"/>
+    </filter>
+  </defs>
   <g transform="translate(42 42) scale(0.8359375)">
-    <rect width="512" height="512" rx="103" ry="103" fill="#FFFFFF"/>
-    <g fill="#000000" stroke="#000000" stroke-width="24" stroke-linecap="round">
+    <rect width="512" height="512" rx="103" ry="103" fill="url(#plate)" filter="url(#shadow)"/>
+    <g fill="#FFD666" stroke="#FFD666" stroke-width="24" stroke-linecap="round">
       <!-- trunk: top node down to the bottom node -->
       <path d="M200 143.5 V 367.5"/>
       <!-- branch: leaves the trunk at mid-height, out to the right node -->

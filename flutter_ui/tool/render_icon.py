@@ -22,6 +22,15 @@ TRUNK = ((200.0, 143.5), (200.0, 367.5))
 BRANCH = ((200.0, 257.0), (312.0, 317.5))
 NODES = [(200.0, 143.5), (200.0, 367.5), (312.0, 317.5)]
 
+# --- 配色：和 CTerminal、CData 同一套深色底板，图形奶油黄 ---
+PLATE_TOP = (41, 43, 48)
+PLATE_BOTTOM = (18, 18, 20)
+INK = (255, 214, 102)     # #FFD666
+# 投影：1024 画布里下移 10px、模糊 24px、35% 黑，换算成局部单位
+SHADOW_OFFSET = 10 / (2 * SCALE)
+SHADOW_SIGMA = 12 / (2 * SCALE)
+SHADOW_ALPHA = 0.35
+
 
 def rounded_rect_sdf(x, y):
     """到 [0,512]² 圆角矩形边界的有符号距离，内部为负。"""
@@ -65,10 +74,18 @@ def render(size):
             # 覆盖率按「到边界还有几个输出像素」线性估计，够这种纯几何图形用。
             alpha = min(max(0.5 - rounded_rect_sdf(lx, ly) * px_per_local, 0.0), 1.0)
             ink = min(max(0.5 - glyph_sdf(lx, ly) * px_per_local, 0.0), 1.0)
-            v = round(255 * (1.0 - ink))
-            a = round(255 * alpha)
-            # 预乘会让 macOS 把半透明边缘画灰，所以保持直通，颜色写满。
-            row += bytes((v, v, v, a))
+            shadow_distance = max(rounded_rect_sdf(lx, ly - SHADOW_OFFSET), 0.0)
+            shadow = SHADOW_ALPHA * math.exp(-0.5 * (shadow_distance / SHADOW_SIGMA) ** 2)
+            # 底板竖向渐变，图形按覆盖率叠在上面；投影是黑色，垫在底板下面
+            t = min(max(ly / CANVAS, 0.0), 1.0)
+            total = alpha + shadow * (1.0 - alpha)
+            pixel = []
+            for top, bottom, ink_channel in zip(PLATE_TOP, PLATE_BOTTOM, INK):
+                plate = top + (bottom - top) * t
+                color = plate + (ink_channel - plate) * ink
+                pixel.append(round(color * alpha / total) if total > 0 else 0)
+            # 预乘会让 macOS 把半透明边缘画灰，所以保持直通
+            row += bytes((*pixel, round(255 * total)))
         rows.append(bytes(row))
     return rows
 

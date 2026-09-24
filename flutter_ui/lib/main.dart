@@ -22,6 +22,7 @@ import 'op_log.dart';
 import 'prefs.dart';
 import 'dialogs.dart';
 import 'prompt.dart';
+import 'push_dialog.dart';
 import 'rebase_plan.dart';
 import 'rebase_sheet.dart';
 import 'settings_sheet.dart';
@@ -253,6 +254,10 @@ class _RepoScreenState extends State<RepoScreen> {
   /// commit dialog lists these, and a non-empty one puts * in the 仓库 list.
   Map<String, List<FileStatus>> _repoChanges = const {};
 
+  /// Every workspace repo's upstream standing, by path. Puts ↑N in the 仓库
+  /// list; refreshed alongside [_repoChanges].
+  Map<String, Tracking> _repoTracking = const {};
+
   /// Files still carrying conflict markers, and which multi-step operation the
   /// repo is in the middle of ("none" when it is not). They travel together:
   /// a merge, rebase, cherry-pick and revert all stop on conflict but each has
@@ -436,9 +441,34 @@ class _RepoScreenState extends State<RepoScreen> {
   /// Only the active repo is watched, so a sibling's status is as fresh as the
   /// last refresh.
   Future<void> _refreshRepoChanges() async {
-    final changes = await _readRepoChanges();
-    if (mounted) setState(() => _repoChanges = changes);
+    final results =
+        await Future.wait([_readRepoChanges(), _readRepoTracking()]);
+    if (!mounted) return;
+    setState(() {
+      _repoChanges = results[0] as Map<String, List<FileStatus>>;
+      _repoTracking = results[1] as Map<String, Tracking>;
+    });
   }
+
+  /// Every workspace repo's tracking, read in parallel. A repo that fails to
+  /// read is left out; the push dialog lists it as unreadable.
+  Future<Map<String, Tracking>> _readRepoTracking() async {
+    final tracking = <String, Tracking>{};
+    await Future.wait([
+      for (final r in _workspaceRepos)
+        Git(r.path).tracking().then((t) {
+          tracking[r.path] = t;
+        }, onError: (Object e) {
+          debugPrint('tracking of ${r.path} failed: $e');
+        }),
+    ]);
+    return tracking;
+  }
+
+  /// One repo's tracking. The active repo's is [_tracking], read on every
+  /// refresh; siblings' only move on a full refresh.
+  Tracking? _trackingOf(String path) =>
+      path == _repoPath ? _tracking : _repoTracking[path];
 
   /// Every workspace repo's status, read live and in parallel. A repo that
   /// fails to read is left out; opening it shows git's own error.
@@ -1332,7 +1362,51 @@ class _RepoScreenState extends State<RepoScreen> {
 
   Future<void> _pull() => _network('拉取', () => _git!.pull());
 
-  Future<void> _push() => _pushRepos([_repoPath]);
+  /// One repo needs no dialog — there is nothing to choose. A workspace opens
+  /// the push dialog with the repos that have commits pre-checked.
+  Future<void> _push() async {
+    if (_workspaceRepos.length <= 1) return _pushRepos([_repoPath]);
+    // Read live: a commit made in a terminal since the last refresh has to be
+    // in the list, pre-checked.
+    final tracking = await _readRepoTracking();
+    if (!mounted) return;
+    setState(() => _repoTracking = tracking);
+    final rows = <PushRow>[
+      for (final r in _workspaceRepos) (repo: r, tracking: tracking[r.path]),
+    ];
+    final picked = ValueNotifier<Set<String>>({
+      for (final row in rows)
+        if (hasPushWork(row.tracking)) row.repo.path,
+    });
+    final targets = await showAppDialog<Set<String>>(
+      context,
+      title: '推送提交',
+      maxWidth: 720,
+      body: PushDialogBody(
+        rows: rows,
+        picked: picked,
+        loadFiles: (path) => Git(path).pushFiles(),
+      ),
+      actions: [
+        DialogButton('取消', onTap: () => Navigator.of(context).pop()),
+        ValueListenableBuilder(
+          valueListenable: picked,
+          builder: (context, value, _) => DialogButton(
+            value.length > 1 ? '推送 ${value.length} 个仓库' : '推送',
+            kind: DialogButtonKind.primary,
+            onTap: () => Navigator.of(context).pop(value),
+          ),
+        ),
+      ],
+    );
+    picked.dispose();
+    if (targets == null || targets.isEmpty) return;
+    // Sidebar order, not the order the boxes were ticked in.
+    await _pushRepos([
+      for (final r in _workspaceRepos)
+        if (targets.contains(r.path)) r.path,
+    ]);
+  }
 
   /// Push each repo in turn after a commit that reached several. One refusing
   /// does not stop the rest; the failures come back together.
@@ -1890,6 +1964,7 @@ class _RepoScreenState extends State<RepoScreen> {
                   palette: p,
                   bold: r.path == _repoPath,
                   dirty: _changesOf(r.path).isNotEmpty,
+                  ahead: _trackingOf(r.path)?.ahead.toInt() ?? 0,
                   tooltip: '${r.path}\n右键切换分支',
                   onTap: () => _openRepoCommit(r),
                 ),
@@ -1911,6 +1986,7 @@ class _RepoScreenState extends State<RepoScreen> {
                 active: b.isCurrent,
                 leading: b.isCurrent ? '●' : null,
                 dirty: b.isCurrent && _changes.isNotEmpty,
+                ahead: b.isCurrent ? (_tracking?.ahead.toInt() ?? 0) : 0,
                 // Left click checks out; the menu holds
                 // everything else.
                 onTap: b.isCurrent
@@ -2998,9 +3074,13 @@ class _SidebarRow extends StatefulWidget {
     this.badge,
     this.bold = false,
     this.dirty = false,
+    this.ahead = 0,
   });
 
   final String label;
+
+  /// Green ↑N after the label: commits waiting to be pushed. Zero shows nothing.
+  final int ahead;
 
   /// A yellow * after the label: the repo has uncommitted changes.
   final bool dirty;
@@ -3095,6 +3175,15 @@ class _SidebarRowState extends State<_SidebarRow> {
                     child: Text('*',
                         style: ui.copyWith(
                             color: p.yellow, fontWeight: FontWeight.w700)),
+                  ),
+                ),
+              if (widget.ahead > 0)
+                Tooltip(
+                  message: '${widget.ahead} 个提交待推送',
+                  child: Padding(
+                    padding: const EdgeInsets.only(left: 4),
+                    child: Text('↑${widget.ahead}',
+                        style: ui.copyWith(color: p.green, fontSize: 11)),
                   ),
                 ),
               if (widget.badge != null) ...[

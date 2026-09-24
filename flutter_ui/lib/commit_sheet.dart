@@ -666,7 +666,7 @@ class _CommitSheetState extends State<CommitSheet> {
     final stagedCount = actionable.where((f) => f.staged).length;
     final all = actionable.isNotEmpty && stagedCount == actionable.length;
     final paths = actionable.map((f) => f.path).toSet().toList();
-    return _Check3(
+    return Check3(
       value: all ? true : (stagedCount > 0 ? null : false),
       tooltip: actionable.isEmpty ? '先解决冲突' : (all ? '取消暂存此组' : '暂存此组'),
       onTap: _busy || actionable.isEmpty
@@ -694,7 +694,7 @@ class _CommitSheetState extends State<CommitSheet> {
           ? null
           : (pos) => showRepoMenu(
               context: context, position: pos, items: widget.menuFor!(repo, f)),
-      check: _Check3(
+      check: Check3(
         value: f.staged,
         tooltip: conflict ? '先解决冲突' : (f.staged ? '取消暂存' : '暂存'),
         onTap: _busy || conflict
@@ -1013,8 +1013,9 @@ class StatusBadge extends StatelessWidget {
 
 /// A checkbox with three states: ticked, clear, and dashed
 /// (`value == null`) for a folder that is partly staged.
-class _Check3 extends StatelessWidget {
-  const _Check3({required this.value, required this.tooltip, this.onTap});
+class Check3 extends StatelessWidget {
+  const Check3(
+      {super.key, required this.value, required this.tooltip, this.onTap});
   final bool? value;
   final String tooltip;
   final VoidCallback? onTap;
@@ -1218,7 +1219,7 @@ class CheckLabel extends StatelessWidget {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              _Check3(
+              Check3(
                   value: value,
                   tooltip: tooltip,
                   onTap: enabled ? () => onChanged!(!value) : null),

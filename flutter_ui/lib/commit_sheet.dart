@@ -5,6 +5,7 @@ import 'context_menu.dart';
 import 'git.dart';
 import 'git_text.dart';
 import 'prefs.dart';
+import 'prompt.dart';
 import 'theme.dart';
 
 /// One repo's rows in the change tree.
@@ -26,6 +27,7 @@ class CommitSheet extends StatefulWidget {
     required this.active,
     required this.diffPane,
     required this.onClose,
+    this.onTogglePresentation,
     required this.onChanged,
     required this.onPickFile,
     required this.onCommitAndPush,
@@ -55,6 +57,7 @@ class CommitSheet extends StatefulWidget {
   final RepoRef active;
   final Widget diffPane;
   final VoidCallback onClose;
+  final VoidCallback? onTogglePresentation;
   final Future<void> Function() onChanged;
   final void Function(RepoRef repo, FileStatus file) onPickFile;
 
@@ -238,8 +241,7 @@ class _CommitSheetState extends State<CommitSheet> {
   }
 
   /// 储藏勾选的文件：每个有勾选的仓库各储藏一次，遇到失败即停。
-  Future<void> _stashStaged() async {
-    final message = _message.text.trim();
+  Future<void> _stashStaged(String message) async {
     for (final g in widget.groups) {
       if (!g.changes.any((f) => f.staged)) continue;
       try {
@@ -249,6 +251,17 @@ class _CommitSheetState extends State<CommitSheet> {
         throw GitError('${g.repo.name}：${e.message}');
       }
     }
+  }
+
+  Future<void> _promptAndStashStaged() async {
+    final message = await promptText(
+      context,
+      title: '储藏已暂存的文件',
+      hint: '储藏说明（留空由 Git 自动生成）',
+      confirmLabel: '储藏',
+    );
+    if (message == null || !mounted) return;
+    await _run(() => _stashStaged(message.trim()));
   }
 
   Future<void> _run(Future<void> Function() action) async {
@@ -340,6 +353,19 @@ class _CommitSheetState extends State<CommitSheet> {
             Text(widget.docked ? '提交 · ${widget.active.name}' : '提交',
                 style: ui.copyWith(color: p.text, fontWeight: FontWeight.w600)),
             const Spacer(),
+            if (widget.onTogglePresentation != null) ...[
+              _Btn(
+                tooltip: widget.docked ? '弹出提交窗' : '还原提交窗',
+                icon: true,
+                onTap: widget.onTogglePresentation,
+                child: Icon(
+                  widget.docked ? Icons.open_in_full : Icons.close_fullscreen,
+                  size: 14,
+                  color: p.text,
+                ),
+              ),
+              const SizedBox(width: 6),
+            ],
             _Btn(
               tooltip: widget.docked ? '收起' : '关闭 (Esc)',
               icon: true,
@@ -473,9 +499,9 @@ class _CommitSheetState extends State<CommitSheet> {
             ),
             const SizedBox(width: 6),
             _Btn(
-              tooltip: '储藏勾选的文件，提交说明有内容时用作储藏说明',
+              tooltip: _staged.isEmpty ? '请先暂存要储藏的文件' : '储藏已暂存的文件并填写储藏说明',
               icon: true,
-              onTap: _busy || _staged.isEmpty ? null : () => _run(_stashStaged),
+              onTap: _busy || _staged.isEmpty ? null : _promptAndStashStaged,
               child: _label(p, '储藏', size: 11),
             ),
             const SizedBox(width: 6),

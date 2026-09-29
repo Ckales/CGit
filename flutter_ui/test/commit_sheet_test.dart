@@ -29,7 +29,14 @@ Widget _host(Widget child) => MaterialApp(
 
 const _demo = RepoRef(path: '/tmp', name: 'demo', branch: 'dev');
 
-CommitSheet _sheet({List<FileStatus>? changes}) => CommitSheet(
+CommitSheet _sheet({
+  Key? key,
+  List<FileStatus>? changes,
+  bool docked = false,
+  VoidCallback? onTogglePresentation,
+}) =>
+    CommitSheet(
+      key: key,
       groups: [
         (
           repo: _demo,
@@ -45,10 +52,12 @@ CommitSheet _sheet({List<FileStatus>? changes}) => CommitSheet(
       active: _demo,
       diffPane: const SizedBox(),
       onClose: () {},
+      onTogglePresentation: onTogglePresentation,
       onChanged: () async {},
       onPickFile: (_, __) {},
       onCommitAndPush: (_) async {},
       onCreatePatch: ({required bool toClipboard}) async {},
+      docked: docked,
     );
 
 /// A repo that records commits into a shared log, and can refuse them.
@@ -166,6 +175,37 @@ void main() {
     await tester.pump();
 
     expect(find.text('修复提交弹窗缺少输入框'), findsOneWidget);
+  });
+
+  testWidgets('the commit panel pops out and returns without losing input',
+      (tester) async {
+    final sheetKey = GlobalKey();
+    var expanded = false;
+    await tester.pumpWidget(_host(StatefulBuilder(
+      builder: (context, setState) {
+        final sheet = _sheet(
+          key: sheetKey,
+          docked: !expanded,
+          onTogglePresentation: () => setState(() => expanded = !expanded),
+        );
+        return Stack(children: [
+          if (!expanded) Stack(fit: StackFit.expand, children: [sheet]),
+          if (expanded) sheet,
+        ]);
+      },
+    )));
+
+    await tester.enterText(_messageBox, 'feat: keep this message');
+    await tester.tap(find.byTooltip('弹出提交窗'));
+    await tester.pump();
+    expect(find.byTooltip('还原提交窗'), findsOneWidget);
+    expect(find.text('feat: keep this message'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('还原提交窗'));
+    await tester.pump();
+    expect(find.byTooltip('弹出提交窗'), findsOneWidget);
+    expect(find.text('feat: keep this message'), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('changes show as a tree under the repo', (tester) async {
@@ -313,16 +353,47 @@ void main() {
       expect(closed, isTrue);
     });
 
-    testWidgets('储藏 stashes every repo with something ticked, and only those',
+    testWidgets('储藏 asks for its own message before stashing staged files',
         (tester) async {
       await pump(tester);
-      await tester.enterText(_messageBox, 'wip: x');
+      await tester.enterText(_messageBox, '提交说明不能代替储藏说明');
       await tester.tap(find.text('储藏'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('储藏已暂存的文件'), findsOneWidget);
+      expect(log, isEmpty);
+      await tester.enterText(
+          find.descendant(
+              of: find.byType(Dialog), matching: find.byType(TextField)),
+          'wip: x');
+      await tester.tap(find.text('储藏').last);
       await tester.pumpAndSettle();
 
       expect(log, ['/w/admin:stash:wip: x', '/w/front:stash:wip: x']);
       // Unticked files are still there to commit, so the sheet stays up.
       expect(closed, isFalse);
+    });
+
+    testWidgets('储藏 is disabled until a file is staged', (tester) async {
+      await tester.pumpWidget(_host(_sheet(changes: const [
+        FileStatus(path: 'a.dart', status: 'M', staged: false),
+      ])));
+
+      final dimmed = tester.widget<Opacity>(find.descendant(
+          of: find.byTooltip('请先暂存要储藏的文件'), matching: find.byType(Opacity)));
+      expect(dimmed.opacity, 0.45);
+    });
+
+    testWidgets('cancelling the stash message leaves every repo untouched',
+        (tester) async {
+      await pump(tester);
+      await tester.tap(find.text('储藏'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('取消'));
+      await tester.pumpAndSettle();
+
+      expect(log, isEmpty);
     });
 
     testWidgets('提交并推送 pushes the repos it committed', (tester) async {

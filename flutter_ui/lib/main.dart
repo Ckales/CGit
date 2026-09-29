@@ -250,6 +250,8 @@ class _RepoScreenState extends State<RepoScreen> {
   /// The commit panel docked under the history for the active repo — only
   /// ever for one with changes; a clean repo gets no empty box.
   bool _commitDocked = false;
+  // Keep its input state when moving between the dock and the overlay.
+  final _commitSheetKey = GlobalKey();
   bool _settingsOpen = false;
   bool _cloneOpen = false;
 
@@ -533,13 +535,12 @@ class _RepoScreenState extends State<RepoScreen> {
   List<FileStatus> _changesOf(String path) =>
       path == _repoPath ? _changes : (_repoChanges[path] ?? const []);
 
-  /// What the commit sheet lists: docked, the active repo alone; as a dialog,
-  /// every repo with changes in sidebar order.
+  /// A sidebar-opened commit sheet stays on the active repo after popping out.
+  /// A toolbar-opened dialog lists all changed workspace repos.
   List<RepoChanges> _commitGroups() {
-    final docked = _commitDocked && !_commitOpen;
     final groups = <RepoChanges>[];
     for (final r in _workspaceRepos) {
-      if (docked && r.path != _repoPath) continue;
+      if (_commitDocked && r.path != _repoPath) continue;
       final changes = _changesOf(r.path);
       if (changes.isEmpty) continue;
       groups.add((repo: r, changes: changes));
@@ -1157,6 +1158,9 @@ class _RepoScreenState extends State<RepoScreen> {
         _target = const NoDiff();
         _paneBack = null;
       });
+
+  void _toggleCommitPresentation() =>
+      setState(() => _commitOpen = !_commitOpen);
 
   Future<void> _discardFile(RepoRef repo, FileStatus f) async {
     if (!await _confirm(
@@ -2161,6 +2165,7 @@ class _RepoScreenState extends State<RepoScreen> {
               items: () => _stashMenu(st),
               child: _SidebarRow(
                 label: st.message,
+                tooltip: st.message,
                 palette: p,
                 leading: '${st.index}',
                 leadingColor: p.textDim,
@@ -2180,6 +2185,7 @@ class _RepoScreenState extends State<RepoScreen> {
   }
 
   Widget _commitSheet(Palette p, {bool docked = false}) => CommitSheet(
+        key: _commitSheetKey,
         groups: _commitGroups(),
         active: _activeRepo,
         diffPane: _diffPane(p),
@@ -2194,6 +2200,7 @@ class _RepoScreenState extends State<RepoScreen> {
         menuFor: _fileMenu,
         onDiscard: _discardFile,
         onClose: _closeCommit,
+        onTogglePresentation: _commitDocked ? _toggleCommitPresentation : null,
         onChanged: _refresh,
         onPickFile: _showFile,
         onCommitAndPush: _pushRepos,
@@ -2250,7 +2257,13 @@ class _RepoScreenState extends State<RepoScreen> {
           // One diff pane, one place:
           // building it twice would mount its block GlobalKeys twice.
           Expanded(
-              child: docked ? _commitSheet(p, docked: true) : _diffPane(p)),
+            child: docked
+                ? Stack(
+                    fit: StackFit.expand,
+                    children: [_commitSheet(p, docked: true)],
+                  )
+                : _diffPane(p),
+          ),
         ],
       ],
     );

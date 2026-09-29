@@ -303,6 +303,8 @@ class _RepoScreenState extends State<RepoScreen> {
   /// One network call at a time: they all touch the same refs, and a fetch
   /// racing a push produces failures that are nobody's fault.
   bool _netBusy = false;
+  Future<void>? _networkDone;
+  int _workspaceOpen = 0;
 
   /// The file open in the merge window, and its worktree text.
   String? _mergeFile;
@@ -421,7 +423,9 @@ class _RepoScreenState extends State<RepoScreen> {
   }
 
   Future<void> _openRepo(String path) async {
+    final opened = ++_workspaceOpen;
     final workspace = await Git.discover(path);
+    if (!mounted || opened != _workspaceOpen) return;
     if (workspace == null || workspace.repos.isEmpty) {
       _fail('不是 Git 仓库：$path');
       return;
@@ -440,7 +444,49 @@ class _RepoScreenState extends State<RepoScreen> {
     });
     // The root, not the member: a member path reopens as a lone repo.
     await widget.prefs.rememberRepo(workspace.root);
+    if (!mounted || opened != _workspaceOpen) return;
     await _setActiveRepo(repo);
+    if (mounted && opened == _workspaceOpen) {
+      unawaited(_backgroundFetch(opened, workspace.repos));
+    }
+  }
+
+  /// A fresh workspace needs one fetch before its remote tracking counts are
+  /// current. Network failures stay quiet unless authentication is broken.
+  Future<void> _backgroundFetch(int opened, List<RepoRef> repos) async {
+    while (_networkDone != null) {
+      await _networkDone;
+    }
+    if (!mounted || opened != _workspaceOpen) return;
+    final done = Completer<void>();
+    _networkDone = done.future;
+    setState(() => _netBusy = true);
+    try {
+      final authFailed = <String>[];
+      await Future.wait(repos.map((repo) async {
+        try {
+          await Git(repo.path).fetch();
+        } on GitError catch (e) {
+          if (isAuthFailure(e.message)) authFailed.add(repo.name);
+        }
+      }));
+      if (!mounted || opened != _workspaceOpen) return;
+      final tracking = await _readRepoTracking();
+      if (!mounted || opened != _workspaceOpen) return;
+      setState(() {
+        _repoTracking = tracking;
+        _tracking = tracking[_repoPath];
+      });
+      if (authFailed.isNotEmpty) {
+        final message =
+            '${authFailed.join('、')} 远程认证失败，请到设置 → Git 信息 → 远程认证检查凭据';
+        _fail(message, summary: message);
+      }
+    } finally {
+      _networkDone = null;
+      done.complete();
+      if (mounted) setState(() => _netBusy = false);
+    }
   }
 
   /// Point the panels at one repo of the open workspace. The sidebar's 仓库
@@ -1404,6 +1450,8 @@ class _RepoScreenState extends State<RepoScreen> {
   /// some refs, and a pull that stops on conflict has already written files.
   Future<void> _network(String label, Future<String> Function() action) async {
     if (_netBusy) return;
+    final done = Completer<void>();
+    _networkDone = done.future;
     setState(() {
       _netBusy = true;
       _status = '$label…';
@@ -1422,6 +1470,8 @@ class _RepoScreenState extends State<RepoScreen> {
             summary: hint);
       }
     } finally {
+      _networkDone = null;
+      done.complete();
       if (mounted) setState(() => _netBusy = false);
     }
   }
@@ -2042,6 +2092,7 @@ class _RepoScreenState extends State<RepoScreen> {
                   bold: r.path == _repoPath,
                   dirty: _changesOf(r.path).isNotEmpty,
                   ahead: _trackingOf(r.path)?.ahead.toInt() ?? 0,
+                  behind: _trackingOf(r.path)?.behind.toInt() ?? 0,
                   tooltip: '${r.path}\n右键切换分支',
                   onTap: () => _openRepoCommit(r),
                 ),
@@ -2064,6 +2115,7 @@ class _RepoScreenState extends State<RepoScreen> {
                 leading: b.isCurrent ? '●' : null,
                 dirty: b.isCurrent && _changes.isNotEmpty,
                 ahead: b.isCurrent ? (_tracking?.ahead.toInt() ?? 0) : 0,
+                behind: b.isCurrent ? (_tracking?.behind.toInt() ?? 0) : 0,
                 // Left click checks out; the menu holds
                 // everything else.
                 onTap: b.isCurrent
@@ -3216,12 +3268,16 @@ class _SidebarRow extends StatefulWidget {
     this.bold = false,
     this.dirty = false,
     this.ahead = 0,
+    this.behind = 0,
   });
 
   final String label;
 
   /// Green ↑N after the label: commits waiting to be pushed. Zero shows nothing.
   final int ahead;
+
+  /// Yellow ↓N after the label: commits available from the upstream.
+  final int behind;
 
   /// A yellow * after the label: the repo has uncommitted changes.
   final bool dirty;
@@ -3325,6 +3381,15 @@ class _SidebarRowState extends State<_SidebarRow> {
                     padding: const EdgeInsets.only(left: 4),
                     child: Text('↑${widget.ahead}',
                         style: ui.copyWith(color: p.green, fontSize: 11)),
+                  ),
+                ),
+              if (widget.behind > 0)
+                Tooltip(
+                  message: '${widget.behind} 个提交待拉取',
+                  child: Padding(
+                    padding: const EdgeInsets.only(left: 4),
+                    child: Text('↓${widget.behind}',
+                        style: ui.copyWith(color: p.yellow, fontSize: 11)),
                   ),
                 ),
               if (widget.badge != null) ...[

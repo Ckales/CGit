@@ -1,0 +1,174 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: 校验标签与应用版本
+        id: check
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version="${TAG#v}"
+          pubspec=$(sed -n 's/^version:[[:space:]]*\([^+[:space:]]*\).*/\1/p' flutter_ui/pubspec.yaml)
+          core=$(sed -n 's/^version = "\(.*\)"/\1/p' crates/cgit-core/Cargo.toml | head -n 1)
+          bridge=$(sed -n 's/^version = "\(.*\)"/\1/p' flutter_ui/rust/Cargo.toml | head -n 1)
+          if [ "$version" != "$pubspec" ] || [ "$version" != "$core" ] || [ "$version" != "$bridge" ]; then
+            echo "::error::标签版本须与 pubspec.yaml、cgit-core 和 cgit_rust 的版本一致"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  macos:
+    needs: version
+    runs-on: macos-latest
+    env:
+      HAS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE_P12 != '' && secrets.MACOS_CERTIFICATE_PASSWORD != '' }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Flutter 检查
+        working-directory: flutter_ui
+        run: flutter analyze && flutter test
+      - name: 构建 macOS
+        working-directory: flutter_ui
+        run: flutter build macos --release
+      - name: 验证通用二进制
+        run: |
+          app=flutter_ui/build/macos/Build/Products/Release/CGit.app
+          for binary in "$app/Contents/MacOS/CGit" "$app/Contents/Frameworks/cgit_rust.framework/cgit_rust"; do
+            archs=$(lipo -archs "$binary")
+            case "$archs" in
+              *arm64*x86_64*|*x86_64*arm64*) ;;
+              *) echo "::error::$binary 不是 arm64 + x86_64 通用二进制"; exit 1 ;;
+            esac
+          done
+
+      - name: 导入 Developer ID 证书
+        if: env.HAS_CERTIFICATE == 'true'
+        env:
+          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          keychain_password=$(openssl rand -base64 24)
+          echo "::add-mask::$keychain_password"
+          printf '%s' "$MACOS_CERTIFICATE_P12" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$RUNNER_TEMP/certificate.p12" -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -t cert -f pkcs12 -k "$keychain" >/dev/null
+          rm "$RUNNER_TEMP/certificate.p12"
+          security set-key-partition-list -S apple-tool:,apple: -k "$keychain_password" "$keychain" >/dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          identity=$(security find-identity -v -p codesigning "$keychain" | awk '/Developer ID Application/ { print $2; exit }')
+          if [ -z "$identity" ]; then
+            echo "::error::证书里没有 Developer ID Application 身份"
+            exit 1
+          fi
+          echo "MACOS_SIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
+
+      - name: 写入公证 API 密钥
+        env:
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        run: |
+          if [ -n "$APPLE_API_KEY" ]; then
+            printf '%s' "$APPLE_API_KEY" > "$RUNNER_TEMP/AuthKey.p8"
+            echo "APPLE_API_KEY_PATH=$RUNNER_TEMP/AuthKey.p8" >> "$GITHUB_ENV"
+          fi
+
+      - name: 签名、公证并制作 DMG
+        env:
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: sh flutter_ui/tool/package_macos.sh flutter_ui/build/macos/Build/Products/Release/CGit.app dist
+      - name: 清理签名材料
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/signing.keychain-db" ]; then
+            security delete-keychain "$RUNNER_TEMP/signing.keychain-db"
+          fi
+          rm -f "$RUNNER_TEMP/AuthKey.p8" "$RUNNER_TEMP/certificate.p12"
+      - uses: actions/upload-artifact@v6
+        with:
+          name: macos
+          path: dist/*.dmg
+          if-no-files-found: error
+
+  windows:
+    needs: version
+    runs-on: windows-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Flutter 检查
+        working-directory: flutter_ui
+        run: flutter analyze && flutter test
+      - name: 构建 Windows
+        working-directory: flutter_ui
+        run: flutter build windows --release
+      - name: 打包完整运行目录
+        shell: pwsh
+        run: |
+          $release = 'flutter_ui/build/windows/x64/runner/Release'
+          if (-not (Test-Path "$release/CGit.exe")) { throw '找不到 CGit.exe' }
+          New-Item -ItemType Directory -Force dist/CGit | Out-Null
+          Copy-Item -Path "$release/*" -Destination dist/CGit -Recurse -Force
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+          $vsInstall = & $vswhere -latest -products * -property installationPath
+          $redist = Join-Path $vsInstall 'VC/Redist/MSVC'
+          foreach ($dll in @('msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll')) {
+            $source = Get-ChildItem $redist -Recurse -Filter $dll |
+              Where-Object { $_.FullName -match '\\x64\\Microsoft\.VC\d+\.CRT\\' } |
+              Sort-Object FullName -Descending | Select-Object -First 1
+            if (-not $source) { throw "缺少 VC++ 运行库：$dll" }
+            Copy-Item $source.FullName dist/CGit/
+          }
+          Compress-Archive -Path dist/CGit -DestinationPath "dist/CGit-$env:VERSION-windows-x64.zip"
+      - uses: actions/upload-artifact@v6
+        with:
+          name: windows
+          path: dist/*.zip
+          if-no-files-found: error
+
+  release:
+    needs: [version, macos, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v6
+        with:
+          path: dist
+          merge-multiple: true
+      - name: 创建待审核的 Release 草稿
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --draft --title "CGit $VERSION" --generate-notes

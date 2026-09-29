@@ -32,8 +32,7 @@ import 'theme.dart';
 import 'watch_debounce.dart';
 
 Future<void> main(List<String> args) async {
-  // The Rust side lives in cgit_rust.framework; nothing below can call it until
-  // this resolves, so it blocks rather than racing the first repo load.
+  // The Rust library must load before the first repository call.
   WidgetsFlutterBinding.ensureInitialized();
   await initGitBridge();
   final prefs = await Prefs.load();
@@ -1686,36 +1685,41 @@ class _RepoScreenState extends State<RepoScreen> {
   @override
   Widget build(BuildContext context) {
     final p = Theming.of(context);
+    SingleActivator shortcut(LogicalKeyboardKey key) => SingleActivator(
+          key,
+          meta: Platform.isMacOS,
+          control: Platform.isWindows,
+        );
 
     return CallbackShortcuts(
       // These stay live while the user is typing: a Flutter TextField gives
       // these keys no behaviour of its own, so there is nothing to yield to and no reason to
-      // track focus. ⌘↵ inside the commit box commits, which is what it should
+      // track focus. The primary shortcut inside the commit box commits, which is what it should
       // do there anyway.
       bindings: {
-        const SingleActivator(LogicalKeyboardKey.keyO, meta: true): _pickRepo,
-        const SingleActivator(LogicalKeyboardKey.comma, meta: true): () {
+        shortcut(LogicalKeyboardKey.keyO): _pickRepo,
+        shortcut(LogicalKeyboardKey.comma): () {
           setState(() => _settingsOpen = true);
         },
-        const SingleActivator(LogicalKeyboardKey.enter, meta: true): () {
+        shortcut(LogicalKeyboardKey.enter): () {
           if (_git != null) _openCommitDialog();
         },
-        const SingleActivator(LogicalKeyboardKey.keyR, meta: true): () {
+        shortcut(LogicalKeyboardKey.keyR): () {
           if (_git != null) _refresh();
         },
-        const SingleActivator(LogicalKeyboardKey.keyT, meta: true): () {
+        shortcut(LogicalKeyboardKey.keyT): () {
           if (_git != null && !_netBusy) _fetch();
         },
-        const SingleActivator(LogicalKeyboardKey.keyL, meta: true): () {
+        shortcut(LogicalKeyboardKey.keyL): () {
           if (_git != null && !_netBusy) _pull();
         },
-        const SingleActivator(LogicalKeyboardKey.keyP, meta: true): () {
+        shortcut(LogicalKeyboardKey.keyP): () {
           if (_git != null && !_netBusy) _push();
         },
-        const SingleActivator(LogicalKeyboardKey.keyN, meta: true): () {
+        shortcut(LogicalKeyboardKey.keyN): () {
           if (_git != null) _newBranch();
         },
-        const SingleActivator(LogicalKeyboardKey.keyS, meta: true): () {
+        shortcut(LogicalKeyboardKey.keyS): () {
           if (_git != null) {
             _saveStash();
           }
@@ -1931,14 +1935,16 @@ class _RepoScreenState extends State<RepoScreen> {
   }
 
   static String _projectName(String path) {
-    final parts = path.split('/').where((s) => s.isNotEmpty);
+    final parts =
+        path.replaceAll('\\', '/').split('/').where((s) => s.isNotEmpty);
     return parts.isEmpty ? path : parts.last;
   }
 
   /// `~` for the home directory, the way the recent list prints paths.
   String _prettyPath(String path) {
-    final home = Platform.environment['HOME'] ?? '';
-    return home.isNotEmpty && path.startsWith('$home/')
+    final home =
+        Platform.environment[Platform.isWindows ? 'USERPROFILE' : 'HOME'] ?? '';
+    return home.isNotEmpty && path.startsWith('$home${Platform.pathSeparator}')
         ? '~${path.substring(home.length)}'
         : path;
   }

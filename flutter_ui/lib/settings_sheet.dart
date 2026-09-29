@@ -533,8 +533,8 @@ class _SettingsSheetState extends State<SettingsSheet> {
     try {
       await Directory(OpLog.dir).create(recursive: true);
       await Git(OpLog.dir).openProject();
-    } on GitError catch (e) {
-      if (mounted) _report(e.message, isError: true);
+    } on Exception catch (e) {
+      if (mounted) _report('$e', isError: true);
     }
   }
 
@@ -597,8 +597,11 @@ class _SettingsSheetState extends State<SettingsSheet> {
             '按应用名调用，不依赖 code / subl 这类命令行工具。'),
         if (_editorScanError != null) _hint(p, '扫描本机编辑器失败：$_editorScanError'),
         if (_editorScanError == null && _editorRows.isEmpty)
-          _hint(p,
-              '没在 /Applications、/System/Applications、~/Applications 里找到已知的编辑器。'),
+          _hint(
+              p,
+              Platform.isWindows
+                  ? '没有找到支持的编辑器，仍可使用系统默认程序。'
+                  : '没在 /Applications、/System/Applications、~/Applications 里找到已知的编辑器。'),
         for (final name in _editorRows)
           _editorRow(p, name, installed: _installed.contains(name)),
         if (_editorRows.isNotEmpty)

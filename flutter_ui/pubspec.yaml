@@ -1,7 +1,7 @@
 name: cgit_flutter
-description: CGit 的 Flutter Desktop UI —— 与 src/ 下的 vanilla JS + WebView 实现做对照
+description: CGit 的 Flutter 桌面界面
 publish_to: "none"
-version: 0.1.0
+version: 1.0.0
 
 environment:
   sdk: ^3.5.0

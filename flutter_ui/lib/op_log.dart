@@ -1,15 +1,23 @@
 import 'dart:io';
 
 /// 操作日志：状态栏的每条消息和每个 git 失败的原文，追加到
-/// ~/Library/Logs/CGit/cgit.log，方便事后排查。默认关，设置 → 通用里打开。
+/// 系统用户日志目录中的 cgit.log，方便事后排查。默认关，设置 → 通用里打开。
 ///
 /// Written synchronously: lines are short and rare (one per user action), and
 /// an async write could land out of order with the next one.
 class OpLog {
   static bool enabled = false;
 
-  static final String dir = '${Platform.environment['HOME']}/Library/Logs/CGit';
-  static String get path => '$dir/cgit.log';
+  static String get dir {
+    final variable = Platform.isWindows ? 'LOCALAPPDATA' : 'HOME';
+    final root = Platform.environment[variable];
+    if (root == null || root.isEmpty) {
+      throw StateError('缺少用户目录环境变量 $variable');
+    }
+    return Platform.isWindows ? '$root\\CGit\\Logs' : '$root/Library/Logs/CGit';
+  }
+
+  static String get path => '$dir${Platform.pathSeparator}cgit.log';
 
   // ponytail: one rotation (cgit.log.1), enough for a project this size.
   static const _maxBytes = 5 * 1024 * 1024;
@@ -29,7 +37,7 @@ class OpLog {
       final line = '${DateTime.now().toIso8601String()} [$level] '
           '${redactUrlCredentials(message.trimRight())}\n';
       File(path).writeAsStringSync(line, mode: FileMode.append);
-    } on FileSystemException catch (e) {
+    } on Exception catch (e) {
       // A log that cannot be written must not break the action it describes.
       stderr.writeln('写操作日志失败：$e');
     }

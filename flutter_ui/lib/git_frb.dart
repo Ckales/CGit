@@ -1,7 +1,7 @@
 // Twice on purpose: unprefixed so the generated types can be named bare, and
 // prefixed so calls like `rust.commit(...)` do not collide with this class's
 // own methods of the same name.
-import 'dart:typed_data';
+import 'package:flutter/services.dart';
 
 import 'op_log.dart';
 import 'src/rust/api/git.dart';
@@ -333,7 +333,8 @@ class Git {
   Future<String> readPatchFile(String file) =>
       _guard(() => rust.readPatchFile(file: file));
 
-  Future<String> readClipboard() => _guard(() => rust.readClipboard());
+  Future<String> readClipboard() =>
+      _guard(() async => (await Clipboard.getData('text/plain'))?.text ?? '');
 
   /// Every local change as one patch.
   Future<String> createPatch() => _guard(() => rust.createPatch(path: repo));
@@ -400,7 +401,7 @@ class Git {
 
   /// Goes through core rather than Flutter's own Clipboard.
   Future<void> copyToClipboard(String text) =>
-      _guard(() => rust.writeClipboard(text: text));
+      _guard(() => Clipboard.setData(ClipboardData(text: text)));
 
   Future<String> deleteTag(String name) =>
       _guard(() => rust.deleteTag(path: repo, name: name));

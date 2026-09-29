@@ -232,7 +232,7 @@ pub fn start_watching(
 /// `.git/refs` (commit, branch create/delete, fetch).
 fn touches_refs(event: &notify::Event) -> bool {
     for p in &event.paths {
-        let s = p.to_string_lossy();
+        let s = p.to_string_lossy().replace('\\', "/");
         if !s.contains("/.git/") {
             continue;
         }
@@ -247,7 +247,7 @@ fn touches_refs(event: &notify::Event) -> bool {
 /// `.git/HEAD` are deliberately NOT here: an external stage or branch switch
 /// should still refresh the UI.
 fn is_watch_noise(p: &std::path::Path) -> bool {
-    let s = p.to_string_lossy();
+    let s = p.to_string_lossy().replace('\\', "/");
     // `.lock` only inside .git — Cargo.lock and yarn.lock are tracked files whose
     // changes must still refresh the UI.
     if s.contains("/.git/") {
@@ -1157,10 +1157,11 @@ fn diff_placeholder(out: String) -> String {
 /// content is shown as a patch. It exits 1 precisely when there IS a diff, so
 /// `run_git` (which treats non-zero as failure) can't be used here.
 fn diff_against_nothing(path: &str, file: &str) -> Result<String, String> {
+    let empty = if cfg!(windows) { "NUL" } else { "/dev/null" };
     let out = git_cmd()
         .arg("-C")
         .arg(path)
-        .args(["diff", "--no-index", "--", "/dev/null", file])
+        .args(["diff", "--no-index", "--", empty, file])
         .output()
         .map_err(|e| format!("运行 git 失败：{e}"))?;
     match out.status.code() {
@@ -1617,7 +1618,6 @@ pub fn read_worktree_file(path: String, file: String) -> Result<String, String> 
 /// 走 `open -a` 而不是 `code` / `subl` 这类 CLI shim：从访达启动的 .app 拿到的
 /// PATH 只有 /usr/bin:/bin:/usr/sbin:/sbin，装在 /opt/homebrew/bin 的 shim 一律
 /// 找不到，而 `open` 就在 /usr/bin 里。
-/// ponytail: 仅 macOS —— 本项目只打 .app 包；要上 Windows/Linux 再按平台分支。
 pub fn open_in_editor(path: String, file: String, editor: String) -> Result<(), String> {
     open_with(&[worktree_file(&path, &file)?], &editor)
 }
@@ -1661,6 +1661,7 @@ pub fn open_path(path: String, editor: String) -> Result<(), String> {
     open_with(&[target], &editor)
 }
 
+#[cfg(not(windows))]
 fn open_with(targets: &[PathBuf], editor: &str) -> Result<(), String> {
     let mut cmd = Command::new("open");
     if !editor.is_empty() {
@@ -1677,49 +1678,148 @@ fn open_with(targets: &[PathBuf], editor: &str) -> Result<(), String> {
     }
 }
 
+#[cfg(windows)]
+fn open_with(targets: &[PathBuf], editor: &str) -> Result<(), String> {
+    if !editor.is_empty() {
+        let executable =
+            windows_editor_path(editor).ok_or_else(|| format!("未找到编辑器：{editor}"))?;
+        Command::new(executable)
+            .args(targets)
+            .spawn()
+            .map_err(|e| format!("启动编辑器失败：{e}"))?;
+        return Ok(());
+    }
+    for target in targets {
+        open_default_windows(target)?;
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn open_default_windows(target: &Path) -> Result<(), String> {
+    use std::ffi::c_void;
+    use std::os::windows::ffi::OsStrExt;
+
+    #[link(name = "shell32")]
+    unsafe extern "system" {
+        fn ShellExecuteW(
+            hwnd: *mut c_void,
+            operation: *const u16,
+            file: *const u16,
+            parameters: *const u16,
+            directory: *const u16,
+            show: i32,
+        ) -> isize;
+    }
+
+    let path: Vec<u16> = target.as_os_str().encode_wide().chain([0]).collect();
+    let result = unsafe {
+        ShellExecuteW(
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            path.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            1,
+        )
+    };
+    if result > 32 {
+        Ok(())
+    } else {
+        Err(format!(
+            "打开 {} 失败：Windows 错误 {result}",
+            target.display()
+        ))
+    }
+}
+
+#[cfg(windows)]
+fn windows_editor_path(name: &str) -> Option<PathBuf> {
+    let relative = match name {
+        "Visual Studio Code" => "Microsoft VS Code\\Code.exe",
+        "VSCodium" => "VSCodium\\VSCodium.exe",
+        "Cursor" => "Cursor\\Cursor.exe",
+        "Windsurf" => "Windsurf\\Windsurf.exe",
+        "Sublime Text" => "Sublime Text\\sublime_text.exe",
+        _ => return None,
+    };
+    for var in ["LOCALAPPDATA", "ProgramFiles", "ProgramFiles(x86)"] {
+        let Some(base) = std::env::var_os(var) else {
+            continue;
+        };
+        let mut path = PathBuf::from(base);
+        if var == "LOCALAPPDATA" {
+            path.push("Programs");
+        }
+        path.push(relative);
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+    None
+}
+
 /// 本机装了哪些编辑器。只返回应用目录里真实存在的 .app，设置里据此给出可勾选的列表，
 /// 而不是让用户手填一个可能根本没装的名字。
 ///
 /// 名单用前缀匹配：JetBrains Toolbox 装出来的是「IntelliJ IDEA Ultimate.app」这类带后缀的名字。
 /// ponytail: 靠固定名单识别，名单外的编辑器认不出来；真有人要用冷门编辑器再加手填入口。
 pub fn list_editors() -> Vec<String> {
-    const KNOWN: &[&str] = &[
-        "Visual Studio Code",
-        "VSCodium",
-        "Cursor",
-        "Windsurf",
-        "Trae",
-        "Zed",
-        "Sublime Text",
-        "Nova",
-        "BBEdit",
-        "TextMate",
-        "Typora",
-        "MacVim",
-        "Emacs",
-        "Xcode",
-        "Android Studio",
-        "Fleet",
-        "IntelliJ IDEA",
-        "WebStorm",
-        "PyCharm",
-        "PhpStorm",
-        "GoLand",
-        "RubyMine",
-        "CLion",
-        "Rider",
-        "DataGrip",
-        "RustRover",
-    ];
-
-    let mut found: Vec<String> = all_apps()
+    #[cfg(windows)]
+    {
+        return [
+            "Visual Studio Code",
+            "VSCodium",
+            "Cursor",
+            "Windsurf",
+            "Sublime Text",
+        ]
         .into_iter()
-        .map(|(name, _)| name)
-        .filter(|name| KNOWN.iter().any(|known| name.starts_with(known)))
+        .filter(|name| windows_editor_path(name).is_some())
+        .map(str::to_string)
         .collect();
-    found.sort();
-    found.dedup();
-    found
+    }
+
+    #[cfg(not(windows))]
+    {
+        const KNOWN: &[&str] = &[
+            "Visual Studio Code",
+            "VSCodium",
+            "Cursor",
+            "Windsurf",
+            "Trae",
+            "Zed",
+            "Sublime Text",
+            "Nova",
+            "BBEdit",
+            "TextMate",
+            "Typora",
+            "MacVim",
+            "Emacs",
+            "Xcode",
+            "Android Studio",
+            "Fleet",
+            "IntelliJ IDEA",
+            "WebStorm",
+            "PyCharm",
+            "PhpStorm",
+            "GoLand",
+            "RubyMine",
+            "CLion",
+            "Rider",
+            "DataGrip",
+            "RustRover",
+        ];
+
+        let mut found: Vec<String> = all_apps()
+            .into_iter()
+            .map(|(name, _)| name)
+            .filter(|name| KNOWN.iter().any(|known| name.starts_with(known)))
+            .collect();
+        found.sort();
+        found.dedup();
+        found
+    }
 }
 
 /// 本机所有 .app 的（名字, 路径）。名字用来匹配名单，路径用来取图标。
@@ -1779,6 +1879,9 @@ fn temp_token() -> String {
 /// `sips` 把 .icns 转成 PNG。取不到就报错，前端只显示文字。
 /// ponytail: 只认 CFBundleIconFile 指向的 .icns；图标打包进 Assets.car 的应用（如 Xcode）取不到。
 pub fn editor_icon(name: String) -> Result<Vec<u8>, String> {
+    if cfg!(windows) {
+        return Err(format!("Windows 不读取编辑器图标：{name}"));
+    }
     let (_, app) = all_apps()
         .into_iter()
         .find(|(n, _)| *n == name)
@@ -2667,12 +2770,17 @@ mod tests {
         // An external checkout rewrites .git/HEAD; a commit writes refs/heads.
         assert!(touches_refs(&event("/w/repo/.git/HEAD")));
         assert!(touches_refs(&event("/w/repo/.git/refs/heads/model_usage")));
+        assert!(touches_refs(&event(r"C:\repo\.git\HEAD")));
+        assert!(touches_refs(&event(r"C:\repo\.git\refs\heads\main")));
         // A worktree edit must stay on the cheap refresh path.
         assert!(!touches_refs(&event("/w/repo/src/main.rs")));
         assert!(!touches_refs(&event("/w/repo/HEAD")));
         // .git/logs/HEAD is reflog churn, dropped as noise before it gets here.
         assert!(is_watch_noise(std::path::Path::new(
             "/w/repo/.git/logs/HEAD"
+        )));
+        assert!(is_watch_noise(std::path::Path::new(
+            r"C:\repo\.git\objects\aa\bb"
         )));
     }
 

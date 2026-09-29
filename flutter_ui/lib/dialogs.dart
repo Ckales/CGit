@@ -75,16 +75,18 @@ Future<T?> showAppDialog<T>(
                     padding: EdgeInsets.only(left: badge == null ? 0 : 36),
                     child: body,
                   ),
-                  const SizedBox(height: 20),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.end,
-                    children: [
-                      for (final (i, action) in actions.indexed) ...[
-                        if (i > 0) const SizedBox(width: 8),
-                        action,
+                  if (actions.isNotEmpty) ...[
+                    const SizedBox(height: 20),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        for (final (i, action) in actions.indexed) ...[
+                          if (i > 0) const SizedBox(width: 8),
+                          action,
+                        ],
                       ],
-                    ],
-                  ),
+                    ),
+                  ],
                 ],
               ),
             ),

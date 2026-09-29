@@ -4,6 +4,7 @@ import 'dart:io' show Platform;
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'ai_settings.dart';
 import 'blame_view.dart';
@@ -12,6 +13,7 @@ import 'clone_sheet.dart';
 import 'commit_menu.dart';
 import 'commit_sheet.dart';
 import 'context_menu.dart';
+import 'date_range_dialog.dart';
 import 'diff_view.dart';
 import 'git.dart';
 import 'git_text.dart';
@@ -71,6 +73,13 @@ class _CGitAppState extends State<CGitApp> {
     return MaterialApp(
       title: 'cgit — Git 客户端',
       debugShowCheckedModeBanner: false,
+      locale: const Locale('zh', 'CN'),
+      supportedLocales: const [Locale('zh', 'CN')],
+      localizationsDelegates: const [
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
       home: Builder(
         builder: (context) => MediaQuery(
           // One text scale is the single font-size knob — the alternative is
@@ -283,9 +292,12 @@ class _RepoScreenState extends State<RepoScreen> {
   /// Search is a separate view over history rather than a filter on the graph:
   /// searchCommits returns a flat list with no parent links, so there are no
   /// lanes to draw. Empty filters mean the graph is showing.
+  final _searchHash = TextEditingController();
   final _searchText = TextEditingController();
   final _searchAuthor = TextEditingController();
+  DateTimeRange? _searchRange;
   List<CommitInfo>? _searchResults;
+  int _searchGeneration = 0;
 
   /// One network call at a time: they all touch the same refs, and a fetch
   /// racing a push produces failures that are nobody's fault.
@@ -357,26 +369,53 @@ class _RepoScreenState extends State<RepoScreen> {
     _watch?.cancel();
     _watchDebounce?.cancel();
     _historyScroll.dispose();
+    _searchHash.dispose();
     _searchText.dispose();
     _searchAuthor.dispose();
     super.dispose();
   }
 
-  /// Re-run the search, or drop back to the graph when both fields are empty.
+  String _searchDate(DateTime date) =>
+      '${date.year.toString().padLeft(4, '0')}-'
+      '${date.month.toString().padLeft(2, '0')}-'
+      '${date.day.toString().padLeft(2, '0')}';
+
+  Future<void> _pickSearchRange() async {
+    final picked = await showCommitDateRangeDialog(context, _searchRange);
+    if (picked == null || !mounted) return;
+    setState(() => _searchRange = picked);
+    await _runSearch();
+  }
+
+  /// Re-run the search, or drop back to the graph when every filter is empty.
   Future<void> _runSearch() async {
+    final generation = ++_searchGeneration;
     final git = _git;
     if (git == null) return;
+    final hashPrefix = _searchHash.text.trim();
     final query = _searchText.text.trim();
     final author = _searchAuthor.text.trim();
-    if (query.isEmpty && author.isEmpty) {
+    final range = _searchRange;
+    if (hashPrefix.isEmpty &&
+        query.isEmpty &&
+        author.isEmpty &&
+        range == null) {
       setState(() => _searchResults = null);
       return;
     }
     try {
-      final found = await git.searchCommits(query: query, author: author);
-      if (mounted) setState(() => _searchResults = found);
+      final found = await git.searchCommits(
+        hashPrefix: hashPrefix,
+        query: query,
+        author: author,
+        since: range == null ? '' : _searchDate(range.start),
+        until: range == null ? '' : _searchDate(range.end),
+      );
+      if (mounted && generation == _searchGeneration) {
+        setState(() => _searchResults = found);
+      }
     } on GitError catch (e) {
-      if (mounted) _fail(e.message);
+      if (mounted && generation == _searchGeneration) _fail(e.message);
     }
   }
 
@@ -415,7 +454,12 @@ class _RepoScreenState extends State<RepoScreen> {
       // Selection, open diff and search all name the previous repo's objects.
       _selectedCommit = null;
       _commitFiles = const [];
+      _searchGeneration++;
       _searchResults = null;
+      _searchHash.clear();
+      _searchText.clear();
+      _searchAuthor.clear();
+      _searchRange = null;
       _target = const NoDiff();
       _paneBack = null;
     });
@@ -905,9 +949,12 @@ class _RepoScreenState extends State<RepoScreen> {
       // Reuses the search list: a file's history is a flat commit list with no
       // lanes, exactly like a search result.
       setState(() {
+        _searchGeneration++;
         _searchResults = history;
+        _searchHash.clear();
         _searchText.text = '';
         _searchAuthor.text = '';
+        _searchRange = null;
         _status = '$file 的历史（${history.length} 条）';
       });
     } on GitError catch (e) {
@@ -2162,7 +2209,7 @@ class _RepoScreenState extends State<RepoScreen> {
         _historyHead(p),
         Expanded(
           child: _searchResults != null
-              ? _searchList(p)
+              ? _searchList()
               : HistoryView(
                   layout: _graph,
                   selected: _selectedCommit?.id,
@@ -2375,8 +2422,7 @@ class _RepoScreenState extends State<RepoScreen> {
     );
   }
 
-  /// A bold 历史 and two search boxes sharing
-  /// the width, filled rather than outlined.
+  /// Hash, message, author and commit-date filters share the history bar.
   Widget _historyHead(Palette p) => Container(
         height: 32,
         padding: const EdgeInsets.symmetric(horizontal: 8),
@@ -2393,9 +2439,13 @@ class _RepoScreenState extends State<RepoScreen> {
                     fontWeight: FontWeight.w600,
                     letterSpacing: 0.5)),
             const SizedBox(width: 8),
+            SizedBox(width: 96, child: _searchField(p, _searchHash, '提交哈希')),
+            const SizedBox(width: 8),
             Expanded(child: _searchField(p, _searchText, '搜索提交说明')),
             const SizedBox(width: 8),
             Expanded(child: _searchField(p, _searchAuthor, '作者')),
+            const SizedBox(width: 8),
+            SizedBox(width: 160, child: _searchDateField(p)),
             if (_searchResults != null) ...[
               const SizedBox(width: 8),
               Text('${_searchResults!.length} 条结果',
@@ -2404,6 +2454,56 @@ class _RepoScreenState extends State<RepoScreen> {
           ],
         ),
       );
+
+  Widget _searchDateField(Palette p) {
+    final range = _searchRange;
+    final label = range == null
+        ? '时间区间'
+        : '${_searchDate(range.start)} 至 ${_searchDate(range.end)}';
+    return Container(
+      height: 23,
+      decoration: BoxDecoration(
+        color: p.bgElev,
+        border: Border.all(color: p.border),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Tooltip(
+              message: range == null ? '按提交时间筛选' : label,
+              child: InkWell(
+                onTap: _pickSearchRange,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                  child: Text(label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: ui.copyWith(
+                          color: range == null ? p.textDim : p.text,
+                          fontSize: 11)),
+                ),
+              ),
+            ),
+          ),
+          if (range != null)
+            Tooltip(
+              message: '清除时间区间',
+              child: InkWell(
+                onTap: () {
+                  setState(() => _searchRange = null);
+                  _runSearch();
+                },
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  child: Icon(Icons.close, size: 13, color: p.textDim),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
 
   Widget _searchField(
     Palette p,
@@ -2414,26 +2514,44 @@ class _RepoScreenState extends State<RepoScreen> {
           borderRadius: BorderRadius.circular(4),
           borderSide: BorderSide(color: color),
         );
-    return TextField(
-      controller: controller,
-      style: ui.copyWith(color: p.text, fontSize: 11),
-      cursorColor: p.accent,
-      // Searching runs git log, so it waits for Enter rather than firing on
-      // every keystroke the way a client-side filter could.
-      onSubmitted: (_) => _runSearch(),
-      decoration: InputDecoration(
-        isDense: true,
-        // 22px box: 11px × 1.3 line + 8px each side, less
-        // the 8px desktop's compact visual density takes off. `constraints`
-        // does not work here — it grows the widget but not the painted box.
-        contentPadding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
-        hintText: hint,
-        hintStyle: ui.copyWith(color: p.textDim, fontSize: 11),
-        filled: true,
-        fillColor: p.bgElev,
-        border: border(p.border),
-        enabledBorder: border(p.border),
-        focusedBorder: border(p.accent),
+    return ValueListenableBuilder<TextEditingValue>(
+      valueListenable: controller,
+      builder: (context, value, _) => TextField(
+        controller: controller,
+        style: ui.copyWith(color: p.text, fontSize: 11),
+        cursorColor: p.accent,
+        // Searching runs git log, so it waits for Enter rather than firing on
+        // every keystroke the way a client-side filter could.
+        onSubmitted: (_) => _runSearch(),
+        decoration: InputDecoration(
+          isDense: true,
+          // 22px box: 11px × 1.3 line + 8px each side, less
+          // the 8px desktop's compact visual density takes off. `constraints`
+          // does not work here — it grows the widget but not the painted box.
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+          hintText: hint,
+          hintStyle: ui.copyWith(color: p.textDim, fontSize: 11),
+          filled: true,
+          fillColor: p.bgElev,
+          border: border(p.border),
+          enabledBorder: border(p.border),
+          focusedBorder: border(p.accent),
+          suffixIconConstraints:
+              const BoxConstraints(minWidth: 20, minHeight: 20),
+          suffixIcon: value.text.isEmpty
+              ? null
+              : Tooltip(
+                  message: '清除$hint',
+                  child: InkWell(
+                    onTap: () {
+                      controller.clear();
+                      _runSearch();
+                    },
+                    child: Icon(Icons.close, size: 13, color: p.textDim),
+                  ),
+                ),
+        ),
       ),
     );
   }
@@ -2441,27 +2559,11 @@ class _RepoScreenState extends State<RepoScreen> {
   /// Search results are a flat list: searchCommits has no parent links, so
   /// there are no lanes to draw and pretending otherwise would draw a wrong
   /// graph rather than no graph.
-  Widget _searchList(Palette p) => ListView.builder(
-        itemExtent: 26,
-        itemCount: _searchResults!.length,
-        itemBuilder: (context, i) {
-          final c = _searchResults![i];
-          return _SidebarRow(
-            label: c.summary,
-            palette: p,
-            leading: c.id.substring(0, 7),
-            leadingColor: p.accent,
-            active: _selectedCommit?.id == c.id,
-            onTap: () => _selectCommit(GraphCommit(
-              id: c.id,
-              summary: c.summary,
-              author: c.author,
-              time: c.time,
-              parents: const [],
-              refs: const [],
-            )),
-          );
-        },
+  Widget _searchList() => SearchResultsView(
+        commits: _searchResults!,
+        selected: _selectedCommit?.id,
+        onSelect: _selectCommit,
+        menuFor: _commitMenu,
       );
 
   /// How far HEAD is from its upstream. Nothing is shown when the branch is in

@@ -287,18 +287,22 @@ class Git {
 
   /* ---------- search and remotes ---------- */
 
-  /// Filter history by message and/or author. An empty query and author means
-  /// "everything", which is how the UI returns to the unfiltered graph without
-  /// a separate call.
+  /// Search history by message, author, hash prefix and local date range.
   Future<List<CommitInfo>> searchCommits({
     String query = '',
     String author = '',
+    String hashPrefix = '',
+    String since = '',
+    String until = '',
     int limit = 200,
   }) =>
       _guard(() => rust.searchCommits(
             path: repo,
             query: query,
             author: author,
+            hashPrefix: hashPrefix,
+            since: since,
+            until: until,
             limit: BigInt.from(limit),
           ));
 

@@ -86,9 +86,18 @@ Future<List<CommitInfo>> searchCommits(
         {required String path,
         required String query,
         required String author,
+        required String hashPrefix,
+        required String since,
+        required String until,
         required BigInt limit}) =>
     RustLib.instance.api.crateApiGitSearchCommits(
-        path: path, query: query, author: author, limit: limit);
+        path: path,
+        query: query,
+        author: author,
+        hashPrefix: hashPrefix,
+        since: since,
+        until: until,
+        limit: limit);
 
 Future<List<CommitInfo>> getFileHistory(
         {required String path, required String file, required BigInt limit}) =>
@@ -390,17 +399,23 @@ class CommitInfo {
   final String summary;
   final String author;
   final PlatformInt64 time;
+  final List<String> refs;
 
   const CommitInfo({
     required this.id,
     required this.summary,
     required this.author,
     required this.time,
+    required this.refs,
   });
 
   @override
   int get hashCode =>
-      id.hashCode ^ summary.hashCode ^ author.hashCode ^ time.hashCode;
+      id.hashCode ^
+      summary.hashCode ^
+      author.hashCode ^
+      time.hashCode ^
+      refs.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -410,7 +425,8 @@ class CommitInfo {
           id == other.id &&
           summary == other.summary &&
           author == other.author &&
-          time == other.time;
+          time == other.time &&
+          refs == other.refs;
 }
 
 class FileStatus {

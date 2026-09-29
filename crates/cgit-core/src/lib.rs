@@ -66,6 +66,7 @@ pub struct CommitInfo {
     pub summary: String,
     pub author: String,
     pub time: i64,
+    pub refs: Vec<String>,
 }
 
 fn open(path: &str) -> Result<Repository, String> {
@@ -645,7 +646,8 @@ pub fn checkout_ref(path: String, ref_name: String) -> Result<String, String> {
 
 /// `%x1f` (unit separator) can't appear in a summary or author name, so it is a
 /// safe field delimiter — unlike a tab, which can.
-const LOG_FORMAT: &str = "--format=%H%x1f%s%x1f%an%x1f%at";
+// The graph displays committer time; search dates and result timestamps use it too.
+const LOG_FORMAT: &str = "--format=%H%x1f%s%x1f%an%x1f%ct";
 
 fn parse_commit_lines(out: &str) -> Vec<CommitInfo> {
     let mut v = Vec::new();
@@ -660,9 +662,31 @@ fn parse_commit_lines(out: &str) -> Vec<CommitInfo> {
             summary: parts.next().unwrap_or("").to_string(),
             author: parts.next().unwrap_or("").to_string(),
             time: parts.next().unwrap_or("0").parse().unwrap_or(0),
+            refs: Vec::new(),
         });
     }
     v
+}
+
+fn attach_commit_decorations(
+    commits: &mut [CommitInfo],
+    decorations: &std::collections::HashMap<gix::ObjectId, Vec<String>>,
+) -> Result<(), String> {
+    for commit in commits {
+        let id = gix::ObjectId::from_hex(commit.id.as_bytes()).map_err(|e| e.to_string())?;
+        commit.refs = decorations.get(&id).cloned().unwrap_or_default();
+    }
+    Ok(())
+}
+
+fn parse_commit_lines_with_refs(path: &str, out: &str) -> Result<Vec<CommitInfo>, String> {
+    let mut commits = parse_commit_lines(out);
+    if commits.is_empty() {
+        return Ok(commits);
+    }
+    let (decorations, _) = reference_decorations(&open(path)?);
+    attach_commit_decorations(&mut commits, &decorations)?;
+    Ok(commits)
 }
 
 fn parse_commit_messages(out: &str) -> Vec<String> {
@@ -683,29 +707,86 @@ pub fn get_commit_messages(path: String, limit: usize) -> Result<Vec<String>, St
     Ok(parse_commit_messages(&out))
 }
 
-/// Flat (non-DAG) commit search across all refs. Message and author filters are
-/// AND-ed, which is what a filter bar means by having both boxes filled.
+/// Flat (non-DAG) commit search. A hash prefix resolves directly to one commit,
+/// so it can find older commits beyond the normal 200-result search window.
+/// All supplied filters are AND-ed.
 pub fn search_commits(
     path: String,
     query: String,
     author: String,
+    hash_prefix: String,
+    since: String,
+    until: String,
     limit: usize,
 ) -> Result<Vec<CommitInfo>, String> {
-    let mut args: Vec<String> = vec![
-        "log".into(),
-        "--all".into(),
-        format!("-n{limit}"),
-        "--regexp-ignore-case".into(),
-        LOG_FORMAT.into(),
-    ];
+    let hash = hash_prefix.trim();
+    if !hash.is_empty() && (hash.len() < 4 || !hash.bytes().all(|b| b.is_ascii_hexdigit())) {
+        return Err("提交哈希至少需要 4 位十六进制字符".into());
+    }
+    for date in [&since, &until] {
+        if !date.is_empty()
+            && (date.len() != 10
+                || !date.bytes().enumerate().all(|(i, b)| {
+                    if i == 4 || i == 7 {
+                        b == b'-'
+                    } else {
+                        b.is_ascii_digit()
+                    }
+                }))
+        {
+            return Err("日期格式应为 YYYY-MM-DD".into());
+        }
+    }
+    if !since.is_empty() && !until.is_empty() && since > until {
+        return Err("开始日期不能晚于结束日期".into());
+    }
+
+    let revision = if hash.is_empty() {
+        None
+    } else {
+        // Hex-only validation keeps the user input out of Git's option and
+        // revision syntax. Git resolves prefixes across the object database.
+        let spec = format!("{hash}^{{commit}}");
+        match run_git(
+            &path,
+            &[
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                "--end-of-options",
+                &spec,
+            ],
+        ) {
+            Ok(id) => Some(id.trim().to_string()),
+            Err(_) => return Ok(Vec::new()),
+        }
+    };
+
+    let mut args: Vec<String> = vec!["log".into()];
+    if revision.is_some() {
+        args.push("--no-walk".into());
+    } else {
+        args.push("--all".into());
+        args.push(format!("-n{limit}"));
+    }
+    args.extend(["--regexp-ignore-case".into(), LOG_FORMAT.into()]);
     if !query.trim().is_empty() {
         args.push(format!("--grep={}", query.trim()));
     }
     if !author.trim().is_empty() {
         args.push(format!("--author={}", author.trim()));
     }
+    if !since.is_empty() {
+        args.push(format!("--since={since} 00:00:00"));
+    }
+    if !until.is_empty() {
+        args.push(format!("--until={until} 23:59:59"));
+    }
+    if let Some(id) = revision {
+        args.push(id);
+    }
     let borrowed: Vec<&str> = args.iter().map(|a| a.as_str()).collect();
-    Ok(parse_commit_lines(&run_git(&path, &borrowed)?))
+    parse_commit_lines_with_refs(&path, &run_git(&path, &borrowed)?)
 }
 
 /// History of a single file. Uses the CLI for `--follow` (libgit2 has no rename
@@ -727,7 +808,7 @@ pub fn get_file_history(
             file.as_str(),
         ],
     )?;
-    Ok(parse_commit_lines(&out))
+    parse_commit_lines_with_refs(&path, &out)
 }
 
 #[derive(Serialize)]
@@ -876,30 +957,29 @@ pub struct GraphCommit {
     pub refs: Vec<String>,
 }
 
-/// Topologically-sorted commits across all branches, with parent ids and ref
-/// decorations, for drawing the history DAG.
-
-pub fn get_graph(path: String, limit: usize) -> Result<Vec<GraphCommit>, String> {
-    let repo = open(&path)?;
-
-    // Map commit oid -> decoration names (branches / tags / HEAD), and collect
-    // the same refs as walk tips in one pass.
+/// The ref labels and branch walk tips shared by graph and filtered history.
+fn reference_decorations(
+    repo: &Repository,
+) -> (
+    std::collections::HashMap<gix::ObjectId, Vec<String>>,
+    Vec<gix::ObjectId>,
+) {
     let mut decor: std::collections::HashMap<gix::ObjectId, Vec<String>> =
         std::collections::HashMap::new();
     let mut tips: Vec<gix::ObjectId> = Vec::new();
     if let Ok(platform) = repo.references() {
         if let Ok(iter) = platform.all() {
-            for r in iter.flatten() {
+            for mut r in iter.flatten() {
                 let name = r.name().shorten().to_string();
                 if name.is_empty() || name == "stash" || name.ends_with("/HEAD") {
                     continue;
                 }
-                let Some(id) = r.try_id() else { continue };
+                let is_branch = r.name().category() == Some(gix::reference::Category::LocalBranch)
+                    || r.name().category() == Some(gix::reference::Category::RemoteBranch);
+                let Ok(id) = r.peel_to_id() else { continue };
                 let id = id.detach();
                 decor.entry(id).or_default().push(name.clone());
-                if r.name().category() == Some(gix::reference::Category::LocalBranch)
-                    || r.name().category() == Some(gix::reference::Category::RemoteBranch)
-                {
+                if is_branch {
                     tips.push(id);
                 }
             }
@@ -910,6 +990,15 @@ pub fn get_graph(path: String, limit: usize) -> Result<Vec<GraphCommit>, String>
         decor.entry(id).or_default().push("HEAD".to_string());
         tips.push(id);
     }
+    (decor, tips)
+}
+
+/// Topologically-sorted commits across all branches, with parent ids and ref
+/// decorations, for drawing the history DAG.
+pub fn get_graph(path: String, limit: usize) -> Result<Vec<GraphCommit>, String> {
+    let repo = open(&path)?;
+    // Search uses the same ref snapshot, so both lists label a commit alike.
+    let (decor, tips) = reference_decorations(&repo);
     if tips.is_empty() {
         return Ok(Vec::new());
     }
@@ -1346,7 +1435,10 @@ pub fn stash_staged(path: String, message: String) -> Result<String, String> {
     if message.trim().is_empty() {
         run_git(&path, &["stash", "push", "--staged"])
     } else {
-        run_git(&path, &["stash", "push", "--staged", "-m", message.as_str()])
+        run_git(
+            &path,
+            &["stash", "push", "--staged", "-m", message.as_str()],
+        )
     }
 }
 
@@ -2458,6 +2550,119 @@ mod tests {
     }
 
     #[test]
+    fn search_results_attach_only_matching_ref_decorations() {
+        let hit = "1111111111111111111111111111111111111111";
+        let other = "2222222222222222222222222222222222222222";
+        let mut commits = parse_commit_lines(&format!(
+            "{hit}\u{1f}subject\u{1f}Ada\u{1f}1780000000\n{other}\u{1f}older\u{1f}Bob\u{1f}1770000000\n"
+        ));
+        let decorations = std::collections::HashMap::from([(
+            gix::ObjectId::from_hex(hit.as_bytes()).unwrap(),
+            vec![
+                "main".to_string(),
+                "origin/main".to_string(),
+                "HEAD".to_string(),
+            ],
+        )]);
+
+        attach_commit_decorations(&mut commits, &decorations).unwrap();
+
+        assert_eq!(commits[0].refs, ["main", "origin/main", "HEAD"]);
+        assert!(commits[1].refs.is_empty());
+        assert_eq!(commits[0].author, "Ada");
+        assert_eq!(commits[0].time, 1780000000);
+    }
+
+    #[test]
+    fn commit_search_combines_hash_author_message_and_date_range() {
+        let path = temp_repo("search-filters");
+        let file = std::path::Path::new(&path).join("f");
+        std::fs::write(&file, "first").unwrap();
+        run_git(&path, &["add", "f"]).unwrap();
+        let first = git_cmd()
+            .arg("-C")
+            .arg(&path)
+            .args(["-c", "user.name=Ada", "commit", "-qm", "first match"])
+            .env("GIT_AUTHOR_DATE", "2029-04-10T12:00:00 +0000")
+            .env("GIT_COMMITTER_DATE", "2030-04-10T12:00:00 +0000")
+            .output()
+            .unwrap();
+        assert!(first.status.success());
+        let first_id = run_git(&path, &["rev-parse", "HEAD"])
+            .unwrap()
+            .trim()
+            .to_string();
+
+        std::fs::write(&file, "second").unwrap();
+        run_git(&path, &["add", "f"]).unwrap();
+        let second = git_cmd()
+            .arg("-C")
+            .arg(&path)
+            .args(["-c", "user.name=Bob", "commit", "-qm", "second match"])
+            .env("GIT_AUTHOR_DATE", "2030-04-10T12:00:00 +0000")
+            .env("GIT_COMMITTER_DATE", "2031-04-10T12:00:00 +0000")
+            .output()
+            .unwrap();
+        assert!(second.status.success());
+
+        let found = search_commits(
+            path.clone(),
+            "match".into(),
+            "Ada".into(),
+            first_id[..7].into(),
+            "2030-01-01".into(),
+            "2030-12-31".into(),
+            200,
+        )
+        .unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].id, first_id);
+        assert_eq!(
+            found[0].time.to_string(),
+            run_git(&path, &["show", "-s", "--format=%ct", first_id.as_str()])
+                .unwrap()
+                .trim()
+        );
+        let by_date = search_commits(
+            path.clone(),
+            "".into(),
+            "".into(),
+            "".into(),
+            "2030-01-01".into(),
+            "2030-12-31".into(),
+            200,
+        )
+        .unwrap();
+        assert_eq!(
+            by_date.iter().map(|c| &c.id).collect::<Vec<_>>(),
+            vec![&first_id]
+        );
+        assert!(search_commits(
+            path.clone(),
+            "match".into(),
+            "Ada".into(),
+            first_id[..7].into(),
+            "2031-01-01".into(),
+            "2031-12-31".into(),
+            200,
+        )
+        .unwrap()
+        .is_empty());
+        assert!(search_commits(
+            path.clone(),
+            "".into(),
+            "".into(),
+            "not-a-hash".into(),
+            "".into(),
+            "".into(),
+            200,
+        )
+        .is_err());
+
+        let _ = std::fs::remove_dir_all(path);
+    }
+
+    #[test]
     fn ref_moves_are_told_apart_from_file_edits() {
         // An external checkout rewrites .git/HEAD; a commit writes refs/heads.
         assert!(touches_refs(&event("/w/repo/.git/HEAD")));
@@ -2738,7 +2943,10 @@ mod tests {
         assert!(err.starts_with("f 同时有"), "{err}");
         // Refused before git ran: no stray stash, worktree untouched.
         assert!(stash_list(path.clone()).unwrap().is_empty());
-        assert_eq!(std::fs::read_to_string(dir.join("f")).unwrap(), "staged+more");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("f")).unwrap(),
+            "staged+more"
+        );
     }
 
     /// A clone of a bare remote with one shared commit, i.e. a repo whose
@@ -2787,7 +2995,10 @@ mod tests {
         std::fs::write(std::path::Path::new(&repo).join("a.txt"), "hello\n").unwrap();
         run_git(&repo, &["add", "a.txt"]).unwrap();
         let diff = get_staged_diff(repo.clone(), String::new()).unwrap();
-        assert!(diff.contains("+hello"), "应包含全部已暂存改动，实际：{diff}");
+        assert!(
+            diff.contains("+hello"),
+            "应包含全部已暂存改动，实际：{diff}"
+        );
     }
 
     #[test]

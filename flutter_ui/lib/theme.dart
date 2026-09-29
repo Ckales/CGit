@@ -91,9 +91,8 @@ const ui = TextStyle(
 /// The ⌄ used by every dropdown and menu button in this app.
 ///
 /// Painted as a stroke (a 10×6 viewBox,
-/// `M1 1.25 5 4.75 9 1.25`, 1.4 wide). Not `Icons.arrow_drop_down`:
-/// `pubspec.yaml` keeps `uses-material-design: false`, so that renders as a
-/// missing-glyph box. Not the text '▾' either: it is tiny in the system font.
+/// `M1 1.25 5 4.75 9 1.25`, 1.4 wide) to preserve the existing compact
+/// control shape. The text '▾' is too small in the system font.
 class Chevron extends StatelessWidget {
   const Chevron({super.key, required this.color, this.size = 10});
 

@@ -1,6 +1,7 @@
 import 'package:flutter/widgets.dart';
 
 import 'context_menu.dart';
+import 'git.dart' show CommitInfo;
 import 'git_text.dart';
 import 'theme.dart';
 
@@ -43,6 +44,7 @@ class HistoryView extends StatelessWidget {
         final isSelected = row.commit.id == selected;
         final rowWidget = _CommitRow(
           row: row,
+          commit: row.commit,
           gutter: gutter,
           selected: isSelected,
           palette: palette,
@@ -58,16 +60,67 @@ class HistoryView extends StatelessWidget {
   }
 }
 
+/// Filtered commits keep the normal history columns without drawing false DAG lanes.
+class SearchResultsView extends StatelessWidget {
+  const SearchResultsView({
+    super.key,
+    required this.commits,
+    required this.selected,
+    required this.onSelect,
+    this.menuFor,
+  });
+
+  final List<CommitInfo> commits;
+  final String? selected;
+  final void Function(GraphCommit commit) onSelect;
+  final List<MenuAction> Function(GraphCommit commit)? menuFor;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = Theming.of(context);
+    return ListView.builder(
+      itemExtent: _rowHeight,
+      itemCount: commits.length,
+      itemBuilder: (context, i) {
+        final result = commits[i];
+        final commit = GraphCommit(
+          id: result.id,
+          summary: result.summary,
+          author: result.author,
+          time: result.time,
+          parents: const [],
+          refs: result.refs,
+        );
+        final rowWidget = _CommitRow(
+          row: null,
+          commit: commit,
+          gutter: _laneWidth * 2,
+          selected: commit.id == selected,
+          palette: palette,
+          onTap: () => onSelect(commit),
+        );
+        if (menuFor == null) return rowWidget;
+        return ContextMenuRegion(
+          items: () => menuFor!(commit),
+          child: rowWidget,
+        );
+      },
+    );
+  }
+}
+
 class _CommitRow extends StatefulWidget {
   const _CommitRow({
     required this.row,
+    required this.commit,
     required this.gutter,
     required this.selected,
     required this.palette,
     required this.onTap,
   });
 
-  final GraphRow row;
+  final GraphRow? row;
+  final GraphCommit commit;
   final double gutter;
   final bool selected;
   final Palette palette;
@@ -83,7 +136,7 @@ class _CommitRowState extends State<_CommitRow> {
   @override
   Widget build(BuildContext context) {
     final p = widget.palette;
-    final c = widget.row.commit;
+    final c = widget.commit;
     final bg = widget.selected
         ? p.bgSel
         : _hover
@@ -103,7 +156,9 @@ class _CommitRowState extends State<_CommitRow> {
               SizedBox(
                 width: widget.gutter,
                 height: _rowHeight,
-                child: CustomPaint(painter: _LanePainter(widget.row, p)),
+                child: widget.row == null
+                    ? null
+                    : CustomPaint(painter: _LanePainter(widget.row!, p)),
               ),
               Padding(
                 padding: const EdgeInsets.only(right: 6),

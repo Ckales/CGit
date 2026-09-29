@@ -2352,12 +2352,21 @@ fn wire__crate__api__git__search_commits_impl(
             let api_path = <String>::sse_decode(&mut deserializer);
             let api_query = <String>::sse_decode(&mut deserializer);
             let api_author = <String>::sse_decode(&mut deserializer);
+            let api_hash_prefix = <String>::sse_decode(&mut deserializer);
+            let api_since = <String>::sse_decode(&mut deserializer);
+            let api_until = <String>::sse_decode(&mut deserializer);
             let api_limit = <usize>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, String>((move || {
                     let output_ok = crate::api::git::search_commits(
-                        api_path, api_query, api_author, api_limit,
+                        api_path,
+                        api_query,
+                        api_author,
+                        api_hash_prefix,
+                        api_since,
+                        api_until,
+                        api_limit,
                     )?;
                     std::result::Result::Ok(output_ok)
                 })())
@@ -2903,6 +2912,7 @@ const _: fn() = || {
         let _: String = CommitInfo.summary;
         let _: String = CommitInfo.author;
         let _: i64 = CommitInfo.time;
+        let _: Vec<String> = CommitInfo.refs;
     }
     {
         let FileStatus = None::<crate::api::git::FileStatus>.unwrap();
@@ -3042,11 +3052,13 @@ impl SseDecode for crate::api::git::CommitInfo {
         let mut var_summary = <String>::sse_decode(deserializer);
         let mut var_author = <String>::sse_decode(deserializer);
         let mut var_time = <i64>::sse_decode(deserializer);
+        let mut var_refs = <Vec<String>>::sse_decode(deserializer);
         return crate::api::git::CommitInfo {
             id: var_id,
             summary: var_summary,
             author: var_author,
             time: var_time,
+            refs: var_refs,
         };
     }
 }
@@ -3557,6 +3569,7 @@ impl flutter_rust_bridge::IntoDart for FrbWrapper<crate::api::git::CommitInfo> {
             self.0.summary.into_into_dart().into_dart(),
             self.0.author.into_into_dart().into_dart(),
             self.0.time.into_into_dart().into_dart(),
+            self.0.refs.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -3870,6 +3883,7 @@ impl SseEncode for crate::api::git::CommitInfo {
         <String>::sse_encode(self.summary, serializer);
         <String>::sse_encode(self.author, serializer);
         <i64>::sse_encode(self.time, serializer);
+        <Vec<String>>::sse_encode(self.refs, serializer);
     }
 }
 

@@ -47,6 +47,7 @@ pub struct _CommitInfo {
     pub summary: String,
     pub author: String,
     pub time: i64,
+    pub refs: Vec<String>,
 }
 
 #[frb(mirror(Tracking))]
@@ -217,9 +218,12 @@ pub fn search_commits(
     path: String,
     query: String,
     author: String,
+    hash_prefix: String,
+    since: String,
+    until: String,
     limit: usize,
 ) -> Result<Vec<cgit_core::CommitInfo>, String> {
-    cgit_core::search_commits(path, query, author, limit)
+    cgit_core::search_commits(path, query, author, hash_prefix, since, until, limit)
 }
 
 pub fn get_file_history(

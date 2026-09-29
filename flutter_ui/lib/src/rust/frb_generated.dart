@@ -281,6 +281,9 @@ abstract class RustLibApi extends BaseApi {
       {required String path,
       required String query,
       required String author,
+      required String hashPrefix,
+      required String since,
+      required String until,
       required BigInt limit});
 
   Future<String> crateApiGitSetConflictStyle(
@@ -2074,6 +2077,9 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       {required String path,
       required String query,
       required String author,
+      required String hashPrefix,
+      required String since,
+      required String until,
       required BigInt limit}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
@@ -2081,6 +2087,9 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_String(path, serializer);
         sse_encode_String(query, serializer);
         sse_encode_String(author, serializer);
+        sse_encode_String(hashPrefix, serializer);
+        sse_encode_String(since, serializer);
+        sse_encode_String(until, serializer);
         sse_encode_usize(limit, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
             funcId: 67, port: port_);
@@ -2090,14 +2099,22 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeErrorData: sse_decode_String,
       ),
       constMeta: kCrateApiGitSearchCommitsConstMeta,
-      argValues: [path, query, author, limit],
+      argValues: [path, query, author, hashPrefix, since, until, limit],
       apiImpl: this,
     ));
   }
 
   TaskConstMeta get kCrateApiGitSearchCommitsConstMeta => const TaskConstMeta(
         debugName: "search_commits",
-        argNames: ["path", "query", "author", "limit"],
+        argNames: [
+          "path",
+          "query",
+          "author",
+          "hashPrefix",
+          "since",
+          "until",
+          "limit"
+        ],
       );
 
   @override
@@ -2553,13 +2570,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   CommitInfo dco_decode_commit_info(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 4)
-      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    if (arr.length != 5)
+      throw Exception('unexpected arr length: expect 5 but see ${arr.length}');
     return CommitInfo(
       id: dco_decode_String(arr[0]),
       summary: dco_decode_String(arr[1]),
       author: dco_decode_String(arr[2]),
       time: dco_decode_i_64(arr[3]),
+      refs: dco_decode_list_String(arr[4]),
     );
   }
 
@@ -2872,8 +2890,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_summary = sse_decode_String(deserializer);
     var var_author = sse_decode_String(deserializer);
     var var_time = sse_decode_i_64(deserializer);
+    var var_refs = sse_decode_list_String(deserializer);
     return CommitInfo(
-        id: var_id, summary: var_summary, author: var_author, time: var_time);
+        id: var_id,
+        summary: var_summary,
+        author: var_author,
+        time: var_time,
+        refs: var_refs);
   }
 
   @protected
@@ -3234,6 +3257,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_String(self.summary, serializer);
     sse_encode_String(self.author, serializer);
     sse_encode_i_64(self.time, serializer);
+    sse_encode_list_String(self.refs, serializer);
   }
 
   @protected

@@ -9,7 +9,9 @@ set(PROJECT_NAME "cgit_rust")
 project(${PROJECT_NAME} LANGUAGES CXX)
 
 include("../cargokit/cmake/cargokit.cmake")
-apply_cargokit(${PROJECT_NAME} ../../rust cgit_rust "")
+# Flutter builds this plugin through windows/flutter/ephemeral/.plugin_symlinks/cgit_rust/windows.
+# CMAKE_CURRENT_SOURCE_DIR keeps that path, so six parents lead back to flutter_ui/rust.
+apply_cargokit(${PROJECT_NAME} ../../../../../../rust cgit_rust "")
 
 # List of absolute paths to libraries that should be bundled with the plugin.
 # This list could contain prebuilt libraries, or libraries created by an

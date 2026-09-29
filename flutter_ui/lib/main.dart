@@ -1318,6 +1318,19 @@ class _RepoScreenState extends State<RepoScreen> {
     }
   }
 
+  /// The main-window stash entry points need an explicit user decision about
+  /// the message; cancelling the prompt must not change the worktree.
+  Future<void> _saveStash() async {
+    final message = await promptText(
+      context,
+      title: '储藏当前改动',
+      hint: '储藏说明（留空由 Git 自动生成）',
+      confirmLabel: '储藏',
+    );
+    if (message == null || !mounted) return;
+    await _stashAction('储藏改动', () => _git!.stashSave(message: message));
+  }
+
   List<MenuAction> _stashMenu(StashEntry s) => [
         MenuAction('弹出（应用并删除）',
             () => _stashAction('弹出储藏', () => _git!.stashPop(s.index.toInt()))),
@@ -1657,7 +1670,7 @@ class _RepoScreenState extends State<RepoScreen> {
         },
         const SingleActivator(LogicalKeyboardKey.keyS, meta: true): () {
           if (_git != null) {
-            _stashAction('储藏改动', () => _git!.stashSave());
+            _saveStash();
           }
         },
         const SingleActivator(LogicalKeyboardKey.escape): () {
@@ -2087,7 +2100,7 @@ class _RepoScreenState extends State<RepoScreen> {
             action: _git == null
                 ? null
                 : _SectionAction('⤓', '储藏当前改动', () {
-                    _stashAction('储藏改动', () => _git!.stashSave());
+                    _saveStash();
                   }),
           ),
           for (final st in _stashes)

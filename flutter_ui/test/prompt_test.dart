@@ -14,6 +14,9 @@ void main() {
   Future<void> open(
     WidgetTester tester, {
     String initial = '',
+    String title = '新建分支',
+    String? hint = '分支名',
+    String confirmLabel = '确定',
   }) async {
     result = null;
     called = false;
@@ -28,9 +31,10 @@ void main() {
               onPressed: () async {
                 result = await promptText(
                   context,
-                  title: '新建分支',
-                  hint: '分支名',
+                  title: title,
+                  hint: hint,
                   initial: initial,
+                  confirmLabel: confirmLabel,
                 );
                 called = true;
               },
@@ -64,7 +68,8 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(called, isTrue);
-    expect(result, isNull, reason: 'the caller must be able to tell these apart');
+    expect(result, isNull,
+        reason: 'the caller must be able to tell these apart');
   });
 
   testWidgets('an empty field still returns a string, for the caller to reject',
@@ -75,6 +80,39 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(result, '');
+  });
+
+  testWidgets('stash prompt lets users provide or omit the stash message',
+      (tester) async {
+    await open(
+      tester,
+      title: '储藏当前改动',
+      hint: '储藏说明（留空由 Git 自动生成）',
+      confirmLabel: '储藏',
+    );
+    expect(find.text('储藏当前改动'), findsOneWidget);
+    expect(find.text('储藏说明（留空由 Git 自动生成）'), findsOneWidget);
+
+    await tester.enterText(find.byType(TextField), 'wip: 调整导航');
+    await tester.tap(find.text('储藏'));
+    await tester.pumpAndSettle();
+
+    expect(called, isTrue);
+    expect(result, 'wip: 调整导航');
+
+    await open(
+      tester,
+      title: '储藏当前改动',
+      hint: '储藏说明（留空由 Git 自动生成）',
+      confirmLabel: '储藏',
+    );
+    await tester.tap(find.text('储藏'));
+    await tester.pumpAndSettle();
+
+    expect(called, isTrue);
+    expect(result, '',
+        reason:
+            'an omitted message deliberately leaves Git to generate WIP text');
   });
 
   testWidgets('enter submits without reaching for the button', (tester) async {

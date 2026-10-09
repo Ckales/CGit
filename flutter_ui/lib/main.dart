@@ -1491,7 +1491,28 @@ class _RepoScreenState extends State<RepoScreen> {
 
   Future<void> _fetch() => _network('抓取', () => _git!.fetch());
 
-  Future<void> _pull() => _network('拉取', () => _git!.pull());
+  /// Pull the sidebar's workspace in order. Keep the targets fixed even if
+  /// the user switches repos, and let one failure leave the others runnable.
+  Future<void> _pull() => _network('拉取', () async {
+        final repos = List<RepoRef>.of(_workspaceRepos);
+        final failures = <String>[];
+        var last = '';
+        for (final (i, repo) in repos.indexed) {
+          if (mounted && repos.length > 1) {
+            setState(() =>
+                _status = '正在拉取 ${repo.name}（${i + 1}/${repos.length}）…');
+          }
+          try {
+            last = await Git(repo.path).pull();
+          } on GitError catch (e) {
+            failures.add(repos.length > 1
+                ? '${repo.name}：${e.message}'
+                : e.message);
+          }
+        }
+        if (failures.isNotEmpty) throw GitError(failures.join('；'));
+        return repos.length > 1 ? '已拉取 ${repos.length} 个仓库' : last;
+      });
 
   /// One repo needs no dialog — there is nothing to choose. A workspace opens
   /// the push dialog with the repos that have commits pre-checked.
@@ -1958,7 +1979,7 @@ class _RepoScreenState extends State<RepoScreen> {
                 _ToolButton(
                     label: '拉取',
                     enabled: _git != null && !_netBusy,
-                    tooltip: '拉取 (⌘L)',
+                    tooltip: multi ? '拉取所有仓库 (⌘L)' : '拉取 (⌘L)',
                     onTap: _pull),
                 _ToolButton(
                     label: '抓取',

@@ -359,7 +359,6 @@ class _CommitSheetState extends State<CommitSheet> {
     final detail = error.detail!;
     final p = Theming.of(context);
     final scroll = ScrollController();
-    var copied = false;
     try {
       await showAppDialog<void>(
         context,
@@ -379,12 +378,15 @@ class _CommitSheetState extends State<CommitSheet> {
           ),
         ),
         actions: [
-          StatefulBuilder(
-            builder: (context, setDialogState) => DialogButton(
-              copied ? '已复制' : '复制日志',
+          Builder(
+            builder: (context) => DialogButton(
+              '复制日志',
               onTap: () async {
+                final route = ModalRoute.of(context)!;
                 await Clipboard.setData(ClipboardData(text: detail));
-                if (context.mounted) setDialogState(() => copied = true);
+                if (context.mounted && route.isCurrent) {
+                  Navigator.of(context).pop();
+                }
               },
             ),
           ),

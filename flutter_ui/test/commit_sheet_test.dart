@@ -485,14 +485,10 @@ void main() {
         });
         addTearDown(() => tester.binding.defaultBinaryMessenger
             .setMockMethodCallHandler(SystemChannels.platform, null));
-        expect(find.text('已复制'), findsNothing);
+        final expectedDetails = tester.widget<SelectableText>(details).data;
         await tester.tap(find.text('复制日志'));
-        await tester.pump();
-        expect(copied, tester.widget<SelectableText>(details).data);
-        expect(find.text('已复制'), findsOneWidget);
-
-        await tester.tap(find.text('关闭'));
         await tester.pumpAndSettle();
+        expect(copied, expectedDetails);
         expect(find.byType(Dialog), findsNothing);
         expect(find.text('查看详情'), findsOneWidget);
       });

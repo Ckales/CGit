@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'ai_settings.dart';
 import 'context_menu.dart';
+import 'dialogs.dart';
 import 'git.dart';
 import 'git_text.dart';
 import 'prefs.dart';
@@ -93,7 +95,7 @@ class _CommitSheetState extends State<CommitSheet> {
   final _message = TextEditingController();
   final _author = TextEditingController();
   final _filter = TextEditingController();
-  String? _error;
+  ({String summary, String? detail})? _error;
   bool _busy = false;
   bool _amend = false;
   bool _signoff = false;
@@ -181,7 +183,7 @@ class _CommitSheetState extends State<CommitSheet> {
             widget.groups.length > 1 ? '# 仓库：${g.repo.name}\n$diff' : diff);
       }
       if (parts.isEmpty) {
-        setState(() => _error = '没有已暂存的改动可供生成');
+        setState(() => _error = (summary: '没有已暂存的改动可供生成', detail: null));
         return;
       }
       final diff = parts.join('\n');
@@ -195,7 +197,9 @@ class _CommitSheetState extends State<CommitSheet> {
       );
       if (mounted) _message.text = text.trim();
     } on GitError catch (e) {
-      if (mounted) setState(() => _error = e.message);
+      if (mounted) {
+        setState(() => _error = (summary: '生成提交说明失败', detail: e.message));
+      }
     } finally {
       if (mounted) setState(() => _generating = false);
     }
@@ -218,7 +222,9 @@ class _CommitSheetState extends State<CommitSheet> {
         ],
       );
     } on GitError catch (e) {
-      if (mounted) setState(() => _error = e.message);
+      if (mounted) {
+        setState(() => _error = (summary: '读取历史提交说明失败', detail: e.message));
+      }
     }
   }
 
@@ -273,7 +279,9 @@ class _CommitSheetState extends State<CommitSheet> {
       await action();
       await widget.onChanged();
     } on GitError catch (e) {
-      if (mounted) setState(() => _error = e.message);
+      if (mounted) {
+        setState(() => _error = (summary: '操作失败', detail: e.message));
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -282,7 +290,7 @@ class _CommitSheetState extends State<CommitSheet> {
   Future<void> _commit({bool push = false}) async {
     final text = _message.text.trim();
     if (text.isEmpty) {
-      setState(() => _error = '提交说明不能为空');
+      setState(() => _error = (summary: '提交说明不能为空', detail: null));
       return;
     }
     // Amending rewords the active repo's HEAD and is allowed with nothing
@@ -297,7 +305,7 @@ class _CommitSheetState extends State<CommitSheet> {
       }
     }
     if (targets.isEmpty) {
-      setState(() => _error = '没有已暂存的改动');
+      setState(() => _error = (summary: '没有已暂存的改动', detail: null));
       return;
     }
 
@@ -329,9 +337,13 @@ class _CommitSheetState extends State<CommitSheet> {
     // Not atomic: a hook refusing one repo leaves the others committed. The
     // failed ones keep their staged files, so the dialog stays up to retry.
     if (failures.isNotEmpty) {
-      setState(() => _error = committed.isEmpty
-          ? failures.join('\n')
-          : '已提交 ${committed.length} 个仓库，失败：\n${failures.join('\n')}');
+      final summary = committed.isEmpty
+          ? '提交失败（${failures.length} 个仓库）'
+          : '已提交 ${committed.length} 个仓库，${failures.length} 个仓库提交失败';
+      setState(() => _error = (
+            summary: summary,
+            detail: '$summary\n\n${failures.join('\n\n')}',
+          ));
       return;
     }
     _message.clear();
@@ -339,6 +351,52 @@ class _CommitSheetState extends State<CommitSheet> {
     // Closed first: the push reports through the status bar, and a dialog
     // sitting on top of it would hide the one thing worth watching.
     if (push) await widget.onCommitAndPush(committed);
+  }
+
+  /// 完整错误日志在独立滚动区域展示，避免挤占文件树和提交输入。
+  Future<void> _showErrorDetail() async {
+    final error = _error!;
+    final detail = error.detail!;
+    final p = Theming.of(context);
+    final scroll = ScrollController();
+    var copied = false;
+    try {
+      await showAppDialog<void>(
+        context,
+        title: error.summary,
+        badge: DialogBadge.danger,
+        maxWidth: 720,
+        body: SizedBox(
+          height: MediaQuery.sizeOf(context).height * 0.55,
+          child: Scrollbar(
+            controller: scroll,
+            thumbVisibility: true,
+            child: SingleChildScrollView(
+              controller: scroll,
+              child: SelectableText(detail,
+                  style: mono.copyWith(color: p.text, fontSize: 11)),
+            ),
+          ),
+        ),
+        actions: [
+          StatefulBuilder(
+            builder: (context, setDialogState) => DialogButton(
+              copied ? '已复制' : '复制日志',
+              onTap: () async {
+                await Clipboard.setData(ClipboardData(text: detail));
+                if (context.mounted) setDialogState(() => copied = true);
+              },
+            ),
+          ),
+          DialogButton('关闭',
+              kind: DialogButtonKind.primary,
+              autofocus: true,
+              onTap: () => Navigator.of(context).pop()),
+        ],
+      );
+    } finally {
+      scroll.dispose();
+    }
   }
 
   @override
@@ -528,8 +586,25 @@ class _CommitSheetState extends State<CommitSheet> {
               color: p.red.withValues(alpha: 0.15),
               borderRadius: BorderRadius.circular(4),
             ),
-            child:
-                Text(_error!, style: ui.copyWith(color: p.red, fontSize: 11)),
+            child: Row(
+              children: [
+                Icon(Icons.error_outline, color: p.red, size: 14),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(_error!.summary,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: ui.copyWith(color: p.red, fontSize: 11)),
+                ),
+                if (_error!.detail != null) ...[
+                  const SizedBox(width: 8),
+                  _Btn(
+                    onTap: _showErrorDetail,
+                    child: _label(p, '查看详情', size: 11, color: p.accent),
+                  ),
+                ],
+              ],
+            ),
           ),
         const SizedBox(height: 12),
         _commitBox(p),

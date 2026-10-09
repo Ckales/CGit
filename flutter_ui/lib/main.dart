@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io' show Platform;
 
 import 'package:file_selector/file_selector.dart';
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
@@ -231,6 +232,7 @@ class _RepoScreenState extends State<RepoScreen> {
   List<String> _blocks = const [];
   final _blockKeys = <String, GlobalKey>{};
   int _blockIndex = -1;
+  DiffTarget? _blocksTarget;
 
   /// Where ← goes back to. Blame and file history take over the whole pane, so
   /// without this the only way out of them is ✕, which closes everything.
@@ -785,6 +787,7 @@ class _RepoScreenState extends State<RepoScreen> {
     }
     _blocks = blocks;
     _blockIndex = -1;
+    _blocksTarget = _target;
     _blockKeys.removeWhere((id, _) => !blocks.contains(id));
     for (final id in blocks) {
       _blockKeys.putIfAbsent(id, GlobalKey.new);
@@ -856,21 +859,28 @@ class _RepoScreenState extends State<RepoScreen> {
       final where = _navIndex < 0 ? '' : ' — ${_navFiles[_navIndex].label}';
       _status = '第 ${index + 1}/${_blocks.length} 处改动$where';
     });
-    final ctx = _blockKeys[_blocks[index]]?.currentContext;
-    if (ctx != null) {
-      Scrollable.ensureVisible(ctx,
-          alignment: 0.3, duration: const Duration(milliseconds: 120));
-    }
+    final target = _target;
+    final block = _blocks[index];
+    // 跨文件时，等新差异完成布局后再定位改动块。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _target != target || _blockIndex != index) return;
+      final ctx = _blockKeys[block]?.currentContext;
+      if (ctx != null) {
+        Scrollable.ensureVisible(ctx,
+            alignment: 0.3, duration: const Duration(milliseconds: 120));
+      }
+    });
   }
 
   Future<void> _reloadDiff() async {
-    final git = switch (_target) {
+    final target = _target;
+    final git = switch (target) {
       WorkingFileDiff(:final repo) => Git(repo),
       _ => _git,
     };
     if (git == null) return;
     try {
-      final hunks = switch (_target) {
+      final hunks = switch (target) {
         NoDiff() => const Hunks(header: '', hunks: []),
         WorkingFileDiff(:final path, :final staged) =>
           await git.hunks(path, staged: staged),
@@ -888,18 +898,21 @@ class _RepoScreenState extends State<RepoScreen> {
       // everything to show and nothing to stage line by line.
       var plain = '';
       if (hunks.hunks.isEmpty) {
-        plain = switch (_target) {
+        plain = switch (target) {
           WorkingFileDiff(:final path, :final staged) => staged
               ? await git.stagedDiff(file: path)
               : await git.unstagedDiff(file: path),
           _ => '',
         };
       }
-      if (mounted) {
+      if (mounted && _target == target) {
         setState(() {
+          // 后台刷新未改变差异时，保留当前导航位置。
+          final changed =
+              _blocksTarget != target || !listEquals(_hunks, hunks.hunks);
           _hunks = hunks.hunks;
           _plainDiff = plain;
-          _recomputeBlocks();
+          if (changed) _recomputeBlocks();
         });
       }
     } on GitError catch (e) {
@@ -2478,6 +2491,7 @@ class _RepoScreenState extends State<RepoScreen> {
                   _ => _hunks.isEmpty && _plainDiff.trim().isNotEmpty
                       ? _PlainDiff(text: _plainDiff, palette: p)
                       : DiffPane(
+                          key: ValueKey(_target),
                           blockKeys: _blockKeys,
                           hunks: _hunks,
                           mode: _mode,

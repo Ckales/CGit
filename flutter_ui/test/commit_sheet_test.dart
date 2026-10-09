@@ -2,6 +2,7 @@ import 'package:cgit_flutter/commit_sheet.dart';
 import 'package:cgit_flutter/git.dart';
 import 'package:cgit_flutter/theme.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// These exist because the first version of this app shipped a commit box that
@@ -130,8 +131,7 @@ void main() {
       // No AiSettings passed at all: the feature exists but cannot be used, and
       // says so by being greyed rather than by failing on click.
       final dimmed = tester.widget<Opacity>(find.descendant(
-          of: find.byTooltip('用 AI 生成提交说明'),
-          matching: find.byType(Opacity)));
+          of: find.byTooltip('用 AI 生成提交说明'), matching: find.byType(Opacity)));
       expect(dimmed.opacity, 0.45);
     });
   });
@@ -253,7 +253,9 @@ void main() {
 
   testWidgets('committing with nothing staged is refused', (tester) async {
     await tester.pumpWidget(_host(_sheet(
-      changes: const [FileStatus(path: 'src/main.js', status: 'M', staged: false)],
+      changes: const [
+        FileStatus(path: 'src/main.js', status: 'M', staged: false)
+      ],
     )));
 
     await tester.enterText(_messageBox, '一些改动');
@@ -268,8 +270,7 @@ void main() {
   testWidgets('the path filter narrows the tree', (tester) async {
     await tester.pumpWidget(_host(_sheet()));
     await tester.enterText(
-        find.ancestor(
-            of: find.text('过滤路径'), matching: find.byType(TextField)),
+        find.ancestor(of: find.text('过滤路径'), matching: find.byType(TextField)),
         'styles');
     await tester.pump();
 
@@ -296,7 +297,8 @@ void main() {
     late List<String> pushed;
     var closed = false;
 
-    Future<void> pump(WidgetTester tester, {String? adminError}) async {
+    Future<void> pump(WidgetTester tester,
+        {String? adminError, bool docked = false}) async {
       log = [];
       pushed = [];
       closed = false;
@@ -313,6 +315,7 @@ void main() {
         ],
         // The active repo need not have changes of its own.
         active: api,
+        docked: docked,
         gitFor: (path) => gits[path]!,
         diffPane: const SizedBox(),
         onClose: () => closed = true,
@@ -428,8 +431,71 @@ void main() {
 
       expect(log, ['/w/admin:commit:feat: z', '/w/front:commit:feat: z']);
       expect(closed, isFalse);
-      expect(find.textContaining('admin：pre-commit hook failed'), findsOneWidget);
       expect(find.textContaining('已提交 1 个仓库'), findsOneWidget);
+      await tester.tap(find.text('查看详情'));
+      await tester.pumpAndSettle();
+      expect(
+          find.textContaining('admin：pre-commit hook failed'), findsOneWidget);
     });
+
+    for (final docked in [false, true]) {
+      testWidgets(
+          'long hook output keeps controls visible (${docked ? 'docked' : 'modal'})',
+          (tester) async {
+        final output =
+            List.generate(100, (i) => '[FAILED] pre-commit task $i').join('\n');
+        await pump(tester, adminError: output, docked: docked);
+        await tester.enterText(_messageBox, 'feat: keep this message');
+        await tester.tap(find.text('提交').last);
+        await tester.pumpAndSettle();
+
+        expect(tester.takeException(), isNull);
+        expect(closed, isFalse);
+        expect(find.textContaining(output), findsNothing);
+        expect(find.text('已提交 1 个仓库，1 个仓库提交失败'), findsOneWidget);
+        expect(tester.getSize(find.byType(ListView).first).height,
+            greaterThan(40));
+        expect(find.text('提交').last.hitTestable(), findsOneWidget);
+        expect(tester.widget<TextField>(_messageBox).controller!.text,
+            'feat: keep this message');
+
+        await tester.tap(find.text('查看详情'));
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+        final details = find.descendant(
+            of: find.byType(Dialog), matching: find.byType(SelectableText));
+        expect(tester.widget<SelectableText>(details).data, contains(output));
+        expect(tester.widget<SelectableText>(details).data, contains('admin：'));
+        expect(find.text('关闭').hitTestable(), findsOneWidget);
+        final scrollable = find
+            .descendant(
+                of: find.byType(Dialog), matching: find.byType(Scrollable))
+            .first;
+        expect(
+            tester.state<ScrollableState>(scrollable).position.maxScrollExtent,
+            greaterThan(0));
+
+        String? copied;
+        tester.binding.defaultBinaryMessenger
+            .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+          if (call.method == 'Clipboard.setData') {
+            copied = (call.arguments as Map)['text'] as String;
+          }
+          return null;
+        });
+        addTearDown(() => tester.binding.defaultBinaryMessenger
+            .setMockMethodCallHandler(SystemChannels.platform, null));
+        expect(find.text('已复制'), findsNothing);
+        await tester.tap(find.text('复制日志'));
+        await tester.pump();
+        expect(copied, tester.widget<SelectableText>(details).data);
+        expect(find.text('已复制'), findsOneWidget);
+
+        await tester.tap(find.text('关闭'));
+        await tester.pumpAndSettle();
+        expect(find.byType(Dialog), findsNothing);
+        expect(find.text('查看详情'), findsOneWidget);
+      });
+    }
   });
 }

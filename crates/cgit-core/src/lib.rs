@@ -638,10 +638,64 @@ pub fn delete_remote_branch(
     )
 }
 
-/// Generic checkout by ref name. Shelling out lets git DWIM a remote branch into
-/// a local tracking branch, and cleanly detach HEAD for a tag.
+/// Checkout a ref. A remote-tracking branch becomes a local branch of the same
+/// short name — created and set to track it when missing, switched to when it
+/// already exists. `git checkout origin/foo` on its own only detaches HEAD,
+/// which is not what a branch row means by 检出. A tag or sha still detaches.
 pub fn checkout_ref(path: String, ref_name: String) -> Result<String, String> {
+    if let Some(local) = remote_tracking_local_name(&path, &ref_name)? {
+        if local_branch_exists(&path, &local)? {
+            return run_git(&path, &["checkout", local.as_str()]);
+        }
+        return run_git(
+            &path,
+            &[
+                "checkout",
+                "-b",
+                local.as_str(),
+                "--track",
+                ref_name.as_str(),
+            ],
+        );
+    }
     run_git(&path, &["checkout", ref_name.as_str()])
+}
+
+/// `origin/feature/foo` → `feature/foo`, using the longest configured remote
+/// name so a remote whose name contains a slash still strips cleanly. `None`
+/// when [ref_name] is not a remote-tracking branch (a tag, a sha, a local branch).
+fn remote_tracking_local_name(path: &str, ref_name: &str) -> Result<Option<String>, String> {
+    if !ref_name.contains('/') || ref_name.ends_with("/HEAD") {
+        return Ok(None);
+    }
+    let repo = open(path)?;
+    let full = format!("refs/remotes/{ref_name}");
+    if repo.find_reference(full.as_str()).is_err() {
+        return Ok(None);
+    }
+    let mut best_len = 0usize;
+    let mut branch = None;
+    for name in repo.remote_names().iter() {
+        let Ok(remote) = name.to_str() else {
+            continue;
+        };
+        let prefix = format!("{remote}/");
+        let Some(rest) = ref_name.strip_prefix(&prefix) else {
+            continue;
+        };
+        if rest.is_empty() || remote.len() <= best_len {
+            continue;
+        }
+        best_len = remote.len();
+        branch = Some(rest.to_string());
+    }
+    Ok(branch)
+}
+
+fn local_branch_exists(path: &str, name: &str) -> Result<bool, String> {
+    let repo = open(path)?;
+    let full = format!("refs/heads/{name}");
+    Ok(repo.find_reference(full.as_str()).is_ok())
 }
 
 /// `%x1f` (unit separator) can't appear in a summary or author name, so it is a
@@ -3448,5 +3502,63 @@ mod tests {
         ));
         assert!(is_conflict_output("error: could not apply 07d7a92... side"));
         assert!(!is_conflict_output("fatal: not a git repository"));
+    }
+
+    #[test]
+    fn checkout_remote_branch_creates_a_local_tracking_branch() {
+        let work = temp_clone("checkout-remote");
+        let root = std::path::Path::new(&work).parent().unwrap().to_path_buf();
+        let bare = root.join("remote.git");
+
+        // No local counterpart: this used to detach HEAD, so the sidebar never
+        // showed the branch as current.
+        run_git(&bare.to_string_lossy(), &["branch", "test", "master"]).unwrap();
+        run_git(&bare.to_string_lossy(), &["branch", "feature/foo", "master"]).unwrap();
+        run_git(&work, &["fetch", "-q", "origin"]).unwrap();
+
+        checkout_ref(work.clone(), "origin/test".into()).unwrap();
+        assert_eq!(
+            run_git(&work, &["rev-parse", "--abbrev-ref", "HEAD"])
+                .unwrap()
+                .trim(),
+            "test"
+        );
+        assert_eq!(
+            run_git(&work, &["rev-parse", "--abbrev-ref", "@{upstream}"])
+                .unwrap()
+                .trim(),
+            "origin/test"
+        );
+
+        // Local branch already there: switch to it, don't error and don't detach.
+        run_git(&work, &["checkout", "-q", "master"]).unwrap();
+        checkout_ref(work.clone(), "origin/test".into()).unwrap();
+        assert_eq!(
+            run_git(&work, &["rev-parse", "--abbrev-ref", "HEAD"])
+                .unwrap()
+                .trim(),
+            "test"
+        );
+
+        // A slash in the branch name stays in the local name.
+        checkout_ref(work.clone(), "origin/feature/foo".into()).unwrap();
+        assert_eq!(
+            run_git(&work, &["rev-parse", "--abbrev-ref", "HEAD"])
+                .unwrap()
+                .trim(),
+            "feature/foo"
+        );
+
+        // Same function, a tag still detaches.
+        run_git(&work, &["tag", "v1"]).unwrap();
+        checkout_ref(work.clone(), "v1".into()).unwrap();
+        assert_eq!(
+            run_git(&work, &["rev-parse", "--abbrev-ref", "HEAD"])
+                .unwrap()
+                .trim(),
+            "HEAD"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

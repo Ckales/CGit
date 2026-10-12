@@ -1,4 +1,5 @@
 import 'dart:math' show max;
+import 'dart:ui' show ViewFocusEvent, ViewFocusState;
 
 import 'package:flutter/material.dart';
 
@@ -134,27 +135,29 @@ class _MenuRoute extends PopupRoute<MenuAction> {
   Widget buildPage(BuildContext context, Animation<double> animation,
       Animation<double> secondaryAnimation) {
     final p = palette;
-    return CustomSingleChildLayout(
-      delegate: _MenuLayout(anchor, alignRight),
-      child: FadeTransition(
-        opacity: animation,
-        child: Material(
-          color: p.bgElev,
-          surfaceTintColor: Colors.transparent,
-          elevation: 6,
-          clipBehavior: Clip.antiAlias,
-          shape: RoundedRectangleBorder(
-            side: BorderSide(color: p.border),
-            borderRadius: BorderRadius.circular(6),
-          ),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(minWidth: 140, maxWidth: 420),
-            child: IntrinsicWidth(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.all(4),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: entries,
+    return _CloseWhenUnfocused(
+      child: CustomSingleChildLayout(
+        delegate: _MenuLayout(anchor, alignRight),
+        child: FadeTransition(
+          opacity: animation,
+          child: Material(
+            color: p.bgElev,
+            surfaceTintColor: Colors.transparent,
+            elevation: 6,
+            clipBehavior: Clip.antiAlias,
+            shape: RoundedRectangleBorder(
+              side: BorderSide(color: p.border),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(minWidth: 140, maxWidth: 420),
+              child: IntrinsicWidth(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(4),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: entries,
+                  ),
                 ),
               ),
             ),
@@ -163,6 +166,59 @@ class _MenuRoute extends PopupRoute<MenuAction> {
       ),
     );
   }
+}
+
+/// The barrier only hears taps inside this window. Switching to another app
+/// never taps it, so the menu would still be open on the way back. Any loss of
+/// focus — the window resigning key, or the app going inactive — closes it.
+class _CloseWhenUnfocused extends StatefulWidget {
+  const _CloseWhenUnfocused({required this.child});
+
+  final Widget child;
+
+  @override
+  State<_CloseWhenUnfocused> createState() => _CloseWhenUnfocusedState();
+}
+
+class _CloseWhenUnfocusedState extends State<_CloseWhenUnfocused>
+    with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  void _close() {
+    if (!mounted) return;
+    final route = ModalRoute.of(context);
+    if (route == null || !route.isCurrent) return;
+    Navigator.of(context).pop();
+  }
+
+  @override
+  void didChangeViewFocus(ViewFocusEvent event) {
+    if (event.state != ViewFocusState.unfocused) return;
+    final view = View.maybeOf(context);
+    if (view != null && event.viewId != view.viewId) return;
+    _close();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.hidden) {
+      _close();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
 }
 
 /// Centred on the anchor horizontally (right edge on it for alignRight); below

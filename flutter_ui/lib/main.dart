@@ -1919,6 +1919,12 @@ class _RepoScreenState extends State<RepoScreen> {
         : multi
             ? '$_repoPath   ·   $_branch   （工作区共 ${_workspaceRepos.length} 个仓库）'
             : '$_repoPath   ·   $_branch';
+    final location = Text(
+      where,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: ui.copyWith(color: p.textDim),
+    );
 
     return Container(
       height: 38,
@@ -1941,12 +1947,30 @@ class _RepoScreenState extends State<RepoScreen> {
                   constraints: BoxConstraints(
                       maxWidth:
                           (box.maxWidth / 2 - 200).clamp(0, box.maxWidth)),
-                  child: Text(
-                    where,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: ui.copyWith(color: p.textDim),
-                  ),
+                  child: _git == null
+                      ? location
+                      : Tooltip(
+                          message: '点击复制仓库路径\n$_repoPath',
+                          child: MouseRegion(
+                            cursor: SystemMouseCursors.click,
+                            child: GestureDetector(
+                              behavior: HitTestBehavior.opaque,
+                              onTap: () async {
+                                final git = _git!;
+                                final path = _repoPath;
+                                try {
+                                  await git.copyToClipboard(path);
+                                  if (mounted) {
+                                    setState(() => _status = '已复制仓库路径：$path');
+                                  }
+                                } on GitError catch (e) {
+                                  if (mounted) _fail(e.message);
+                                }
+                              },
+                              child: location,
+                            ),
+                          ),
+                        ),
                 ),
                 _trackingChip(p),
                 const Spacer(),
@@ -2193,6 +2217,8 @@ class _RepoScreenState extends State<RepoScreen> {
             for (final rb in _remoteBranches)
               ContextMenuRegion(
                 items: () => [
+                  MenuAction('检出', () => _checkoutRef(rb)),
+                  MenuAction("从 '$rb' 新建分支…", () => _newBranch(base: rb)),
                   MenuAction(
                     '删除远端分支',
                     () => _deleteRemoteBranch(rb),
@@ -2202,7 +2228,8 @@ class _RepoScreenState extends State<RepoScreen> {
                 child: _SidebarRow(
                   label: rb,
                   palette: p,
-                  // git DWIMs origin/foo into a local tracking branch.
+                  // Creates a local tracking branch when there isn't one. A plain
+                  // `git checkout origin/foo` only detaches HEAD.
                   onTap: () => _checkoutRef(rb),
                 ),
               ),

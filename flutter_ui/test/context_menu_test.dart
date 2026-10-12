@@ -3,6 +3,7 @@ import 'dart:ui' show ViewFocusDirection, ViewFocusEvent, ViewFocusState;
 import 'package:cgit_flutter/context_menu.dart';
 import 'package:cgit_flutter/theme.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// The barrier only dismisses a tap inside this window. Switching away used to
@@ -56,5 +57,20 @@ void main() {
 
     expect(find.text('检出'), findsNothing);
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+  });
+
+  testWidgets('closes when the title bar is clicked', (tester) async {
+    bindWindowChrome();
+    await open(tester);
+
+    final codec = const StandardMethodCodec();
+    await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+      'cgit/window',
+      codec.encodeMethodCall(const MethodCall('chromeClick')),
+      (_) {},
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('检出'), findsNothing);
   });
 }

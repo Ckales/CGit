@@ -22,5 +22,26 @@ class MainFlutterWindow: NSWindow {
     self.contentMinSize = NSSize(width: 900, height: 600)
     self.setContentSize(NSSize(width: 1280, height: 820))
     self.center()
+
+    // Clicks in the title bar never reach the Flutter view, and the window
+    // stays key, so the context menu's barrier and focus-loss handler both miss
+    // them. Tell Dart; it closes the menu if one is open.
+    chromeChannel = FlutterMethodChannel(
+      name: "cgit/window",
+      binaryMessenger: flutterViewController.engine.binaryMessenger
+    )
+  }
+
+  private var chromeChannel: FlutterMethodChannel?
+
+  override func sendEvent(_ event: NSEvent) {
+    if event.type == .leftMouseDown || event.type == .rightMouseDown,
+       let content = contentView {
+      let point = content.convert(event.locationInWindow, from: nil)
+      if !content.bounds.contains(point) {
+        chromeChannel?.invokeMethod("chromeClick", arguments: nil)
+      }
+    }
+    super.sendEvent(event)
   }
 }

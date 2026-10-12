@@ -35,6 +35,7 @@ import 'watch_debounce.dart';
 Future<void> main(List<String> args) async {
   // The Rust library must load before the first repository call.
   WidgetsFlutterBinding.ensureInitialized();
+  bindWindowChrome();
   await initGitBridge();
   final prefs = await Prefs.load();
   OpLog.enabled = prefs.opLog;

@@ -1,9 +1,23 @@
+import 'dart:async';
 import 'dart:math' show max;
 import 'dart:ui' show ViewFocusEvent, ViewFocusState;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'theme.dart';
+
+/// Clicks in the native title bar never reach the Flutter barrier, and the
+/// window stays key, so focus-loss doesn't fire either. The macOS runner sends
+/// these here.
+const windowChromeChannel = MethodChannel('cgit/window');
+final windowChromeClicks = StreamController<void>.broadcast();
+
+void bindWindowChrome() {
+  windowChromeChannel.setMethodCallHandler((call) async {
+    if (call.method == 'chromeClick') windowChromeClicks.add(null);
+  });
+}
 
 /// One row of a context menu.
 class MenuAction {
@@ -168,9 +182,8 @@ class _MenuRoute extends PopupRoute<MenuAction> {
   }
 }
 
-/// The barrier only hears taps inside this window. Switching to another app
-/// never taps it, so the menu would still be open on the way back. Any loss of
-/// focus — the window resigning key, or the app going inactive — closes it.
+/// The barrier only hears taps inside the Flutter view. The native title bar
+/// and switching to another app never tap it, so those close the menu too.
 class _CloseWhenUnfocused extends StatefulWidget {
   const _CloseWhenUnfocused({required this.child});
 
@@ -182,14 +195,18 @@ class _CloseWhenUnfocused extends StatefulWidget {
 
 class _CloseWhenUnfocusedState extends State<_CloseWhenUnfocused>
     with WidgetsBindingObserver {
+  late final StreamSubscription<void> _chrome;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _chrome = windowChromeClicks.stream.listen((_) => _close());
   }
 
   @override
   void dispose() {
+    _chrome.cancel();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }

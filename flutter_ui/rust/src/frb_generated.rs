@@ -1014,10 +1014,11 @@ fn wire__crate__api__git__get_graph_impl(
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
             let api_path = <String>::sse_decode(&mut deserializer);
             let api_limit = <usize>::sse_decode(&mut deserializer);
+            let api_ref_name = <Option<String>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, String>((move || {
-                    let output_ok = crate::api::git::get_graph(api_path, api_limit)?;
+                    let output_ok = crate::api::git::get_graph(api_path, api_limit, api_ref_name)?;
                     std::result::Result::Ok(output_ok)
                 })())
             }
@@ -2356,6 +2357,7 @@ fn wire__crate__api__git__search_commits_impl(
             let api_since = <String>::sse_decode(&mut deserializer);
             let api_until = <String>::sse_decode(&mut deserializer);
             let api_limit = <usize>::sse_decode(&mut deserializer);
+            let api_ref_name = <Option<String>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, String>((move || {
@@ -2367,6 +2369,7 @@ fn wire__crate__api__git__search_commits_impl(
                         api_since,
                         api_until,
                         api_limit,
+                        api_ref_name,
                     )?;
                     std::result::Result::Ok(output_ok)
                 })())

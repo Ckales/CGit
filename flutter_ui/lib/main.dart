@@ -218,6 +218,8 @@ class _RepoScreenState extends State<RepoScreen> {
   List<RemoteInfo> _remotes = const [];
   List<FileStatus> _changes = const [];
   GraphLayout _graph = const GraphLayout([], 1);
+  int _historyGeneration = 0;
+  int _refreshGeneration = 0;
 
   GraphCommit? _selectedCommit;
   List<FileStatus> _commitFiles = const [];
@@ -425,6 +427,36 @@ class _RepoScreenState extends State<RepoScreen> {
     }
   }
 
+  /// 旧的分支或仓库请求不得覆盖当前选择。
+  Future<void> _loadHistory() async {
+    final git = _git;
+    if (git == null) return;
+    final generation = ++_historyGeneration;
+    _searchGeneration++;
+    try {
+      final commits = await git.graph(
+        limit: widget.prefs.historyPageSize,
+      );
+      if (!mounted || generation != _historyGeneration || git != _git) return;
+      setState(() => _graph = layoutGraph(commits));
+      // 文件历史也使用平铺列表，普通刷新时保留该视图。
+      if (_searchResults == null ||
+          _searchHash.text.trim().isNotEmpty ||
+          _searchText.text.trim().isNotEmpty ||
+          _searchAuthor.text.trim().isNotEmpty ||
+          _searchRange != null) {
+        await _runSearch();
+      }
+    } on GitError catch (e) {
+      if (!mounted || generation != _historyGeneration || git != _git) return;
+      setState(() {
+        _graph = const GraphLayout([], 1);
+        _searchResults = null;
+      });
+      _fail(e.message);
+    }
+  }
+
   Future<void> _openRepo(String path) async {
     final opened = ++_workspaceOpen;
     final workspace = await Git.discover(path);
@@ -500,6 +532,8 @@ class _RepoScreenState extends State<RepoScreen> {
       _git = Git(repo.path);
       _repoName = repo.name;
       _repoPath = repo.path;
+      _historyGeneration++;
+      _graph = const GraphLayout([], 1);
       _commitDocked = false;
       // Selection, open diff and search all name the previous repo's objects.
       _selectedCommit = null;
@@ -717,7 +751,7 @@ class _RepoScreenState extends State<RepoScreen> {
         git.conflicts(),
         git.repoState(),
       ]);
-      if (!mounted) return;
+      if (!mounted || git != _git) return;
       setState(() {
         _changes = results[0] as List<FileStatus>;
         _branches = results[1] as List<BranchInfo>;
@@ -736,6 +770,7 @@ class _RepoScreenState extends State<RepoScreen> {
   Future<void> _refresh() async {
     final git = _git;
     if (git == null) return;
+    final generation = ++_refreshGeneration;
     try {
       final results = await Future.wait([
         git.currentBranch(),
@@ -743,34 +778,34 @@ class _RepoScreenState extends State<RepoScreen> {
         git.tags(),
         git.remotes(),
         git.status(),
-        git.graph(limit: widget.prefs.historyPageSize),
         git.conflicts(),
         git.repoState(),
         git.tracking(),
         git.stashList(),
         git.remoteBranches(),
       ]);
-      if (!mounted) return;
+      if (!mounted || git != _git || generation != _refreshGeneration) return;
       setState(() {
         _branch = results[0] as String;
         _branches = results[1] as List<BranchInfo>;
         _tags = results[2] as List<String>;
         _remotes = results[3] as List<RemoteInfo>;
         _changes = results[4] as List<FileStatus>;
-        _graph = layoutGraph(results[5] as List<GraphCommit>);
-        _conflicts = results[6] as List<String>;
-        _op = results[7] as String;
-        _tracking = results[8] as Tracking;
-        _stashes = results[9] as List<StashEntry>;
-        _remoteBranches = results[10] as List<String>;
+        _conflicts = results[5] as List<String>;
+        _op = results[6] as String;
+        _tracking = results[7] as Tracking;
+        _stashes = results[8] as List<StashEntry>;
+        _remoteBranches = results[9] as List<String>;
         // The 仓库 badges were read once at discover; keep the open one in step
         // with checkouts made here or elsewhere.
         _workspaceRepos = _withRepoBranch(_repoPath, _branch);
         _status = '就绪';
       });
-      await Future.wait([_reloadDiff(), _refreshRepoChanges()]);
+      await Future.wait([_loadHistory(), _reloadDiff(), _refreshRepoChanges()]);
     } on GitError catch (e) {
-      if (mounted) _fail(e.message);
+      if (mounted && git == _git && generation == _refreshGeneration) {
+        _fail(e.message);
+      }
     }
   }
 
@@ -991,9 +1026,12 @@ class _RepoScreenState extends State<RepoScreen> {
   }
 
   /// Check out any ref by name — a remote branch, a tag, or a sha.
-  Future<void> _checkoutRef(String refName) => _stashAction(
+  Future<void> _checkoutRef(String refName) => _branchAction(
         '检出 $refName',
-        () => _git!.checkoutRef(refName),
+        () async {
+          await _git!.checkoutRef(refName);
+        },
+        followHead: true,
       );
 
   Future<void> _showFileHistory(String file) async {
@@ -1056,11 +1094,26 @@ class _RepoScreenState extends State<RepoScreen> {
     String done,
     Future<void> Function() action, {
     String? confirm,
+    bool followHead = false,
   }) async {
     if (_git == null) return;
     if (confirm != null && !await _confirm(title: done, body: confirm)) return;
     try {
       await action();
+      if (!mounted) return;
+      if (followHead) {
+        setState(() {
+          _historyGeneration++;
+          _searchGeneration++;
+          _graph = const GraphLayout([], 1);
+          _searchResults = null;
+          _selectedCommit = null;
+          _commitFiles = const [];
+          _target = const NoDiff();
+          _paneBack = null;
+        });
+        if (_historyScroll.hasClients) _historyScroll.jumpTo(0);
+      }
       await _refresh();
       if (mounted) setState(() => _status = done);
     } on GitError catch (e) {
@@ -1072,8 +1125,9 @@ class _RepoScreenState extends State<RepoScreen> {
         branch: b,
         currentBranch: _branch,
         run: (cmd) => switch (cmd) {
-          BranchCommand.checkout =>
-            _branchAction('已切换到 ${b.name}', () => _git!.checkout(b.name)),
+          BranchCommand.checkout => _branchAction(
+              '已切换到 ${b.name}', () => _git!.checkout(b.name),
+              followHead: true),
           BranchCommand.newFrom => _newBranch(base: b.name),
           BranchCommand.mergeInto =>
             _stashAction('合并 ${b.name}', () => _git!.mergeBranch(b.name)),
@@ -1132,6 +1186,7 @@ class _RepoScreenState extends State<RepoScreen> {
     await _branchAction(
       '已创建并检出 ${name.trim()}',
       () => _git!.createBranch(name.trim(), base: base),
+      followHead: true,
     );
   }
 
@@ -1383,7 +1438,7 @@ class _RepoScreenState extends State<RepoScreen> {
     });
     try {
       final raw = await git.commitFiles(commit.id);
-      if (!mounted) return;
+      if (!mounted || git != _git || _selectedCommit?.id != commit.id) return;
       // Stored in the tree's drawing order, so ↑/↓ and the first file opened
       // follow the list as the user sees it, not git's flat path order.
       final byPath = {for (final f in raw) f.path: f};
@@ -1400,7 +1455,9 @@ class _RepoScreenState extends State<RepoScreen> {
       });
       await _reloadDiff();
     } on GitError catch (e) {
-      if (mounted) _fail(e.message);
+      if (mounted && git == _git && _selectedCommit?.id == commit.id) {
+        _fail(e.message);
+      }
     }
   }
 
@@ -2175,13 +2232,13 @@ class _RepoScreenState extends State<RepoScreen> {
                 dirty: b.isCurrent && _changes.isNotEmpty,
                 ahead: b.isCurrent ? (_tracking?.ahead.toInt() ?? 0) : 0,
                 behind: b.isCurrent ? (_tracking?.behind.toInt() ?? 0) : 0,
-                // Left click checks out; the menu holds
-                // everything else.
+                tooltip: '单击切换分支并查看历史',
                 onTap: b.isCurrent
                     ? null
                     : () => _branchAction(
                           '已切换到 ${b.name}',
                           () => _git!.checkout(b.name),
+                          followHead: true,
                         ),
               ),
             ),
@@ -2229,8 +2286,7 @@ class _RepoScreenState extends State<RepoScreen> {
                 child: _SidebarRow(
                   label: rb,
                   palette: p,
-                  // Creates a local tracking branch when there isn't one. A plain
-                  // `git checkout origin/foo` only detaches HEAD.
+                  tooltip: '单击检出远端分支并查看历史',
                   onTap: () => _checkoutRef(rb),
                 ),
               ),

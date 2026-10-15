@@ -88,8 +88,9 @@ class Git {
 
   /// `limit` is `usize` in core, which frb maps to BigInt. Converting here keeps
   /// that out of the UI rather than changing core's signature.
-  Future<List<GraphCommit>> graph({int limit = 200}) =>
-      _guard(() => rust.getGraph(path: repo, limit: BigInt.from(limit)));
+  Future<List<GraphCommit>> graph({int limit = 200, String? refName}) =>
+      _guard(() => rust.getGraph(
+          path: repo, limit: BigInt.from(limit), refName: refName));
 
   Future<Hunks> hunks(String file, {required bool staged}) =>
       _guard(() => rust.getHunks(path: repo, file: file, staged: staged));
@@ -295,6 +296,7 @@ class Git {
     String since = '',
     String until = '',
     int limit = 200,
+    String? refName,
   }) =>
       _guard(() => rust.searchCommits(
             path: repo,
@@ -304,6 +306,7 @@ class Git {
             since: since,
             until: until,
             limit: BigInt.from(limit),
+            refName: refName,
           ));
 
   Future<List<String>> remoteBranches() =>

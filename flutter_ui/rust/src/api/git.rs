@@ -222,8 +222,18 @@ pub fn search_commits(
     since: String,
     until: String,
     limit: usize,
+    ref_name: Option<String>,
 ) -> Result<Vec<cgit_core::CommitInfo>, String> {
-    cgit_core::search_commits(path, query, author, hash_prefix, since, until, limit)
+    cgit_core::search_commits(
+        path,
+        query,
+        author,
+        hash_prefix,
+        since,
+        until,
+        limit,
+        ref_name,
+    )
 }
 
 pub fn get_file_history(
@@ -238,8 +248,12 @@ pub fn get_blame(path: String, file: String) -> Result<Vec<cgit_core::BlameLine>
     cgit_core::get_blame(path, file)
 }
 
-pub fn get_graph(path: String, limit: usize) -> Result<Vec<cgit_core::GraphCommit>, String> {
-    cgit_core::get_graph(path, limit)
+pub fn get_graph(
+    path: String,
+    limit: usize,
+    ref_name: Option<String>,
+) -> Result<Vec<cgit_core::GraphCommit>, String> {
+    cgit_core::get_graph(path, limit, ref_name)
 }
 
 pub fn stage_file(path: String, file: String) -> Result<(), String> {

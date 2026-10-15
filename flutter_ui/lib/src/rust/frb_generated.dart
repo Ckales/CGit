@@ -171,7 +171,7 @@ abstract class RustLibApi extends BaseApi {
   Future<GitCredentialInfo> crateApiGitGetGitCredential({required String path});
 
   Future<List<GraphCommit>> crateApiGitGetGraph(
-      {required String path, required BigInt limit});
+      {required String path, required BigInt limit, String? refName});
 
   Future<String> crateApiGitGetHeadMessage({required String path});
 
@@ -284,7 +284,8 @@ abstract class RustLibApi extends BaseApi {
       required String hashPrefix,
       required String since,
       required String until,
-      required BigInt limit});
+      required BigInt limit,
+      String? refName});
 
   Future<String> crateApiGitSetConflictStyle(
       {required String path, required String file, required String style});
@@ -1069,12 +1070,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @override
   Future<List<GraphCommit>> crateApiGitGetGraph(
-      {required String path, required BigInt limit}) {
+      {required String path, required BigInt limit, String? refName}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_String(path, serializer);
         sse_encode_usize(limit, serializer);
+        sse_encode_opt_String(refName, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
             funcId: 28, port: port_);
       },
@@ -1083,14 +1085,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeErrorData: sse_decode_String,
       ),
       constMeta: kCrateApiGitGetGraphConstMeta,
-      argValues: [path, limit],
+      argValues: [path, limit, refName],
       apiImpl: this,
     ));
   }
 
   TaskConstMeta get kCrateApiGitGetGraphConstMeta => const TaskConstMeta(
         debugName: "get_graph",
-        argNames: ["path", "limit"],
+        argNames: ["path", "limit", "refName"],
       );
 
   @override
@@ -2080,7 +2082,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       required String hashPrefix,
       required String since,
       required String until,
-      required BigInt limit}) {
+      required BigInt limit,
+      String? refName}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -2091,6 +2094,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_String(since, serializer);
         sse_encode_String(until, serializer);
         sse_encode_usize(limit, serializer);
+        sse_encode_opt_String(refName, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
             funcId: 67, port: port_);
       },
@@ -2099,7 +2103,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeErrorData: sse_decode_String,
       ),
       constMeta: kCrateApiGitSearchCommitsConstMeta,
-      argValues: [path, query, author, hashPrefix, since, until, limit],
+      argValues: [
+        path,
+        query,
+        author,
+        hashPrefix,
+        since,
+        until,
+        limit,
+        refName
+      ],
       apiImpl: this,
     ));
   }
@@ -2113,7 +2126,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           "hashPrefix",
           "since",
           "until",
-          "limit"
+          "limit",
+          "refName"
         ],
       );
 

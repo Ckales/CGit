@@ -236,7 +236,7 @@ fn touches_refs(event: &notify::Event) -> bool {
         if !s.contains("/.git/") {
             continue;
         }
-        if s.ends_with("/HEAD") || s.contains("/refs/") {
+        if s.ends_with("/HEAD") || s.ends_with("/packed-refs") || s.contains("/refs/") {
             return true;
         }
     }
@@ -772,6 +772,7 @@ pub fn search_commits(
     since: String,
     until: String,
     limit: usize,
+    ref_name: Option<String>,
 ) -> Result<Vec<CommitInfo>, String> {
     let hash = hash_prefix.trim();
     if !hash.is_empty() && (hash.len() < 4 || !hash.bytes().all(|b| b.is_ascii_hexdigit())) {
@@ -795,6 +796,11 @@ pub fn search_commits(
         return Err("开始日期不能晚于结束日期".into());
     }
 
+    let repo = open(&path)?;
+    let Some(tip) = history_tip(&repo, ref_name.as_deref())? else {
+        return Ok(Vec::new());
+    };
+
     let revision = if hash.is_empty() {
         None
     } else {
@@ -811,7 +817,20 @@ pub fn search_commits(
                 &spec,
             ],
         ) {
-            Ok(id) => Some(id.trim().to_string()),
+            Ok(id) => {
+                let id = id.trim().to_string();
+                let mut reachable = false;
+                for ancestor in repo.rev_walk([tip]).all().map_err(|e| e.to_string())? {
+                    if ancestor.map_err(|e| e.to_string())?.id.to_string() == id {
+                        reachable = true;
+                        break;
+                    }
+                }
+                if !reachable {
+                    return Ok(Vec::new());
+                }
+                Some(id)
+            }
             Err(_) => return Ok(Vec::new()),
         }
     };
@@ -820,7 +839,6 @@ pub fn search_commits(
     if revision.is_some() {
         args.push("--no-walk".into());
     } else {
-        args.push("--all".into());
         args.push(format!("-n{limit}"));
     }
     args.extend(["--regexp-ignore-case".into(), LOG_FORMAT.into()]);
@@ -838,7 +856,10 @@ pub fn search_commits(
     }
     if let Some(id) = revision {
         args.push(id);
+    } else {
+        args.push(tip.to_string());
     }
+    args.push("--".into());
     let borrowed: Vec<&str> = args.iter().map(|a| a.as_str()).collect();
     parse_commit_lines_with_refs(&path, &run_git(&path, &borrowed)?)
 }
@@ -1047,22 +1068,41 @@ fn reference_decorations(
     (decor, tips)
 }
 
-/// Topologically-sorted commits across all branches, with parent ids and ref
-/// decorations, for drawing the history DAG.
-pub fn get_graph(path: String, limit: usize) -> Result<Vec<GraphCommit>, String> {
+/// Resolve the selected ref, or HEAD when no branch is selected.
+fn history_tip(repo: &Repository, ref_name: Option<&str>) -> Result<Option<gix::ObjectId>, String> {
+    if let Some(name) = ref_name {
+        let mut reference = repo.find_reference(name).map_err(|e| e.to_string())?;
+        return reference
+            .peel_to_id()
+            .map(|id| Some(id.detach()))
+            .map_err(|e| e.to_string());
+    }
+    repo.head()
+        .map_err(|e| e.to_string())?
+        .try_peel_to_id()
+        .map(|id| id.map(|id| id.detach()))
+        .map_err(|e| e.to_string())
+}
+
+/// Selected branch history, including merged ancestors and ref decorations.
+pub fn get_graph(
+    path: String,
+    limit: usize,
+    ref_name: Option<String>,
+) -> Result<Vec<GraphCommit>, String> {
     let repo = open(&path)?;
     // Search uses the same ref snapshot, so both lists label a commit alike.
-    let (decor, tips) = reference_decorations(&repo);
-    if tips.is_empty() {
+    let (decor, _) = reference_decorations(&repo);
+    let Some(tip) = history_tip(&repo, ref_name.as_deref())? else {
         return Ok(Vec::new());
-    }
+    };
 
     // gix's `rev_walk` sorting has no topological mode — its own docs point at
     // `gix-traverse`'s topo walk for that, so we go one layer down. `DateOrder`
     // is `git rev-list --date-order`: no parent before its children, commit
     // timestamp order otherwise, which is what the graph is drawn from.
     let walk = gix::traverse::commit::topo::Builder::new(repo.objects.clone())
-        .with_tips(tips)
+        .with_tips([tip])
         .sorting(gix::traverse::commit::topo::Sorting::DateOrder)
         .build()
         .map_err(|e| e.to_string())?;
@@ -2731,6 +2771,31 @@ mod tests {
     }
 
     #[test]
+    fn empty_history_and_missing_refs_are_explicit() {
+        let path = std::env::temp_dir().join(format!("cgit-empty-history-{}", std::process::id()));
+        std::fs::create_dir_all(&path).unwrap();
+        let repo = gix::init(&path).unwrap();
+        assert!(history_tip(&repo, None).unwrap().is_none());
+        assert!(history_tip(&repo, Some("refs/heads/missing")).is_err());
+        assert!(get_graph(path.to_string_lossy().into_owned(), 100, None)
+            .unwrap()
+            .is_empty());
+        assert!(search_commits(
+            path.to_string_lossy().into_owned(),
+            "match".into(),
+            "".into(),
+            "".into(),
+            "".into(),
+            "".into(),
+            100,
+            None,
+        )
+        .unwrap()
+        .is_empty());
+        std::fs::remove_dir_all(&path).unwrap();
+    }
+
+    #[test]
     fn commit_search_combines_hash_author_message_and_date_range() {
         let path = temp_repo("search-filters");
         let file = std::path::Path::new(&path).join("f");
@@ -2770,6 +2835,7 @@ mod tests {
             "2030-01-01".into(),
             "2030-12-31".into(),
             200,
+            None,
         )
         .unwrap();
         assert_eq!(found.len(), 1);
@@ -2788,6 +2854,7 @@ mod tests {
             "2030-01-01".into(),
             "2030-12-31".into(),
             200,
+            None,
         )
         .unwrap();
         assert_eq!(
@@ -2802,6 +2869,7 @@ mod tests {
             "2031-01-01".into(),
             "2031-12-31".into(),
             200,
+            None,
         )
         .unwrap()
         .is_empty());
@@ -2813,6 +2881,7 @@ mod tests {
             "".into(),
             "".into(),
             200,
+            None,
         )
         .is_err());
 
@@ -2824,6 +2893,7 @@ mod tests {
         // An external checkout rewrites .git/HEAD; a commit writes refs/heads.
         assert!(touches_refs(&event("/w/repo/.git/HEAD")));
         assert!(touches_refs(&event("/w/repo/.git/refs/heads/model_usage")));
+        assert!(touches_refs(&event("/w/repo/.git/packed-refs")));
         assert!(touches_refs(&event(r"C:\repo\.git\HEAD")));
         assert!(touches_refs(&event(r"C:\repo\.git\refs\heads\main")));
         // A worktree edit must stay on the cheap refresh path.
@@ -3513,7 +3583,11 @@ mod tests {
         // No local counterpart: this used to detach HEAD, so the sidebar never
         // showed the branch as current.
         run_git(&bare.to_string_lossy(), &["branch", "test", "master"]).unwrap();
-        run_git(&bare.to_string_lossy(), &["branch", "feature/foo", "master"]).unwrap();
+        run_git(
+            &bare.to_string_lossy(),
+            &["branch", "feature/foo", "master"],
+        )
+        .unwrap();
         run_git(&work, &["fetch", "-q", "origin"]).unwrap();
 
         checkout_ref(work.clone(), "origin/test".into()).unwrap();

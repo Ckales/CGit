@@ -84,7 +84,9 @@ class _GitApi extends RustLibApi {
 
   @override
   Future<List<GraphCommit>> crateApiGitGetGraph(
-          {required String path, required BigInt limit}) async =>
+          {required String path,
+          required BigInt limit,
+          String? refName}) async =>
       [];
 
   @override

@@ -89,7 +89,8 @@ Future<List<CommitInfo>> searchCommits(
         required String hashPrefix,
         required String since,
         required String until,
-        required BigInt limit}) =>
+        required BigInt limit,
+        String? refName}) =>
     RustLib.instance.api.crateApiGitSearchCommits(
         path: path,
         query: query,
@@ -97,7 +98,8 @@ Future<List<CommitInfo>> searchCommits(
         hashPrefix: hashPrefix,
         since: since,
         until: until,
-        limit: limit);
+        limit: limit,
+        refName: refName);
 
 Future<List<CommitInfo>> getFileHistory(
         {required String path, required String file, required BigInt limit}) =>
@@ -109,8 +111,9 @@ Future<List<BlameLine>> getBlame(
     RustLib.instance.api.crateApiGitGetBlame(path: path, file: file);
 
 Future<List<GraphCommit>> getGraph(
-        {required String path, required BigInt limit}) =>
-    RustLib.instance.api.crateApiGitGetGraph(path: path, limit: limit);
+        {required String path, required BigInt limit, String? refName}) =>
+    RustLib.instance.api
+        .crateApiGitGetGraph(path: path, limit: limit, refName: refName);
 
 Future<void> stageFile({required String path, required String file}) =>
     RustLib.instance.api.crateApiGitStageFile(path: path, file: file);

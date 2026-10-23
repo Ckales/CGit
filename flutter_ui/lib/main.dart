@@ -1596,6 +1596,7 @@ class _RepoScreenState extends State<RepoScreen> {
         rows: rows,
         picked: picked,
         loadFiles: (path) => Git(path).pushFiles(),
+        loadDiff: (repo, path) => Git(repo).pushDiff(path),
         fileMenu: (repo, path) => _commitFileMenu(path,
             repo: repo, beforeView: () => Navigator.of(context).pop()),
       ),

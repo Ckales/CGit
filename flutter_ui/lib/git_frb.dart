@@ -475,6 +475,9 @@ class Git {
   Future<List<FileStatus>> pushFiles() =>
       _guard(() => rust.getPushFiles(path: repo));
 
+  Future<String> pushDiff(String file) =>
+      _guard(() => rust.getPushDiff(path: repo, file: file));
+
   Future<String> fetch() => _guard(() => rust.gitFetch(path: repo));
 
   /// `strategy` is null (--ff-only), 'merge' or 'rebase'.

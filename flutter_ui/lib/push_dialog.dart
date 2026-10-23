@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 
 import 'commit_sheet.dart';
 import 'context_menu.dart';
+import 'dialogs.dart';
+import 'diff_view.dart';
 import 'git.dart';
 import 'git_text.dart';
 import 'network_ops.dart';
@@ -28,12 +30,14 @@ class PushDialogBody extends StatefulWidget {
     required this.rows,
     required this.picked,
     required this.loadFiles,
+    required this.loadDiff,
     required this.fileMenu,
   });
 
   final List<PushRow> rows;
   final ValueNotifier<Set<String>> picked;
   final Future<List<FileStatus>> Function(String path) loadFiles;
+  final Future<String> Function(String repo, String path) loadDiff;
 
   /// The right-click menu of a file row: repo path, then the file's path.
   final List<MenuAction> Function(String repo, String path) fileMenu;
@@ -73,6 +77,77 @@ class _PushDialogBodyState extends State<PushDialogBody> {
     final next = {...widget.picked.value};
     if (!next.remove(path)) next.add(path);
     widget.picked.value = next;
+  }
+
+  /// 双击查看待推送差异，关闭后保留推送选择。
+  Future<void> _showDiff(String path) {
+    final repo = _focus.repo;
+    final tracking = _focus.tracking!;
+    late final diff = widget.loadDiff(repo.path, path);
+    var mode = DiffMode.split;
+    final screen = MediaQuery.sizeOf(context);
+    return showAppDialog<void>(
+      context,
+      title: '${repo.name} / $path',
+      maxWidth: 1200,
+      body: SizedBox(
+        width: (screen.width * 0.94 - 40).clamp(400, 1160),
+        height: (screen.height * 0.84 - 140).clamp(180, 640),
+        child: StatefulBuilder(builder: (context, setMode) {
+          final p = Theming.of(context);
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '共同祖先 → ${tracking.branch}（待推送差异）',
+                      style: ui.copyWith(color: p.textDim),
+                    ),
+                  ),
+                  DialogButton(
+                    mode == DiffMode.split ? '并排' : '统一',
+                    onTap: () => setMode(() {
+                      mode = mode == DiffMode.split
+                          ? DiffMode.unified
+                          : DiffMode.split;
+                    }),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Expanded(
+                child: FutureBuilder<String>(
+                  future: diff,
+                  builder: (context, snap) {
+                    if (snap.hasError) {
+                      return SingleChildScrollView(
+                        child: _note(p, '读取差异失败：${snap.error}'),
+                      );
+                    }
+                    final text = snap.data;
+                    if (text == null) return _note(p, '载入差异中…');
+                    final patch = splitPatchText(text);
+                    if (patch.hunks.isEmpty) {
+                      return SingleChildScrollView(
+                        padding: const EdgeInsets.all(8),
+                        child: SelectableText(text,
+                            style: mono.copyWith(color: p.text)),
+                      );
+                    }
+                    return DiffPane(hunks: patch.hunks, mode: mode);
+                  },
+                ),
+              ),
+            ],
+          );
+        }),
+      ),
+      actions: [
+        DialogButton('关闭', onTap: () => Navigator.of(context).pop()),
+      ],
+    );
   }
 
   @override
@@ -237,7 +312,7 @@ class _PushDialogBodyState extends State<PushDialogBody> {
     }
     for (final f in node.files) {
       rows.add(Tooltip(
-        message: f.path,
+        message: '${f.path}\n双击查看差异',
         waitDuration: const Duration(milliseconds: 800),
         child: _treeRow(
           p,
@@ -256,6 +331,7 @@ class _PushDialogBodyState extends State<PushDialogBody> {
               ),
             ],
           ),
+          onDoubleTap: () => _showDiff(f.path),
           onMenuAt: (pos) => showRepoMenu(
             context: context,
             position: pos,
@@ -268,10 +344,13 @@ class _PushDialogBodyState extends State<PushDialogBody> {
   }
 
   Widget _treeRow(Palette p, int depth, Widget child,
-          {VoidCallback? onTap, void Function(Offset)? onMenuAt}) =>
+          {VoidCallback? onTap,
+          VoidCallback? onDoubleTap,
+          void Function(Offset)? onMenuAt}) =>
       _HoverRow(
         indent: depth * 14,
         onTap: onTap,
+        onDoubleTap: onDoubleTap,
         onMenuAt: onMenuAt,
         child: child,
       );
@@ -291,6 +370,7 @@ class _HoverRow extends StatefulWidget {
     this.indent = 0,
     this.current = false,
     this.onTap,
+    this.onDoubleTap,
     this.onMenuAt,
   });
 
@@ -298,6 +378,7 @@ class _HoverRow extends StatefulWidget {
   final double indent;
   final bool current;
   final VoidCallback? onTap;
+  final VoidCallback? onDoubleTap;
   final void Function(Offset position)? onMenuAt;
 
   @override
@@ -310,9 +391,11 @@ class _HoverRowState extends State<_HoverRow> {
   @override
   Widget build(BuildContext context) {
     final p = Theming.of(context);
-    final clickable = widget.onTap != null || widget.onMenuAt != null;
+    final clickable = widget.onTap != null ||
+        widget.onDoubleTap != null ||
+        widget.onMenuAt != null;
     return MouseRegion(
-      cursor: widget.onTap == null
+      cursor: widget.onTap == null && widget.onDoubleTap == null
           ? SystemMouseCursors.basic
           : SystemMouseCursors.click,
       onEnter: clickable ? (_) => setState(() => _hover = true) : null,
@@ -320,6 +403,7 @@ class _HoverRowState extends State<_HoverRow> {
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: widget.onTap,
+        onDoubleTap: widget.onDoubleTap,
         onSecondaryTapUp: widget.onMenuAt == null
             ? null
             : (d) => widget.onMenuAt!(d.globalPosition),

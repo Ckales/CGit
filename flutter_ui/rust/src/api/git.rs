@@ -306,6 +306,10 @@ pub fn get_push_files(path: String) -> Result<Vec<cgit_core::FileStatus>, String
     cgit_core::get_push_files(path)
 }
 
+pub fn get_push_diff(path: String, file: String) -> Result<String, String> {
+    cgit_core::get_push_diff(path, file)
+}
+
 pub fn get_commit_diff(path: String, oid: String, file: String) -> Result<String, String> {
     cgit_core::get_commit_diff(path, oid, file)
 }

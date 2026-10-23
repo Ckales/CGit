@@ -1375,12 +1375,81 @@ pub fn get_commit_files(path: String, oid: String) -> Result<Vec<FileStatus>, St
 /// instead of presenting the remote's own commits as ours, inverted.
 pub fn get_push_files(path: String) -> Result<Vec<FileStatus>, String> {
     let repo = open(&path)?;
-    let name = head_branch_name(&repo).ok_or("HEAD 不在分支上")?;
+    let (base, head_oid) = push_range(&repo)?;
+    let changes = push_changes(&repo, base, head_oid)?;
+    Ok(diff_files(&changes))
+}
+
+/// 读取待推送文件从共同祖先到 HEAD 的差异。
+pub fn get_push_diff(path: String, file: String) -> Result<String, String> {
+    let repo = open(&path)?;
+    let (base, head) = push_range(&repo)?;
+    let mut source_file = None;
+    let mut is_copy = false;
+    for change in push_changes(&repo, base, head)? {
+        if let gix::object::tree::diff::ChangeDetached::Rewrite {
+            source_location,
+            location,
+            copy,
+            ..
+        } = change
+        {
+            if location.as_slice() == file.as_bytes() {
+                source_file = Some(source_location.to_string());
+                is_copy = copy;
+                break;
+            }
+        }
+    }
+    let base = base.to_string();
+    let head = head.to_string();
+    let mut args = vec![
+        "--literal-pathspecs",
+        "diff",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-color",
+        if source_file.is_some() {
+            "--find-renames"
+        } else {
+            "--no-renames"
+        },
+    ];
+    if is_copy {
+        args.extend(["--find-copies", "--find-copies-harder"]);
+    }
+    args.extend([base.as_str(), head.as_str(), "--", file.as_str()]);
+    // 单独过滤新路径会使 Git 把改名当成新增；两侧路径必须一起比较。
+    if let Some(source) = &source_file {
+        args.push(source.as_str());
+    }
+    let out = run_git(&path, &args)?;
+    Ok(diff_placeholder(out))
+}
+
+/// 读取待推送范围的文件变化，保留改名前的路径。
+fn push_changes(
+    repo: &gix::Repository,
+    base: gix::ObjectId,
+    head: gix::ObjectId,
+) -> Result<Vec<gix::object::tree::diff::ChangeDetached>, String> {
+    let tree_of = |id: gix::ObjectId| {
+        repo.find_commit(id)
+            .map_err(|e| e.to_string())
+            .and_then(|c| c.tree().map_err(|e| e.to_string()))
+    };
+    repo.diff_tree_to_tree(Some(&tree_of(base)?), Some(&tree_of(head)?), None)
+        .map_err(|e| e.to_string())
+}
+
+/// 文件列表和补丁共用待推送范围，排除仅在上游的提交。
+fn push_range(repo: &gix::Repository) -> Result<(gix::ObjectId, gix::ObjectId), String> {
+    let name = head_branch_name(repo).ok_or("HEAD 不在分支上")?;
     let head_oid = repo
         .head_commit()
         .map_err(|_| "分支还没有提交".to_string())?
         .id;
-    let up_ref = upstream_ref_name(&repo, name.as_str()).ok_or("分支没有上游")?;
+    let up_ref = upstream_ref_name(repo, name.as_str()).ok_or("分支没有上游")?;
     let up_oid = repo
         .find_reference(up_ref.as_ref())
         .map_err(|e| e.to_string())?
@@ -1392,15 +1461,7 @@ pub fn get_push_files(path: String) -> Result<Vec<FileStatus>, String> {
         .map_err(|e| e.to_string())?
         .detach();
 
-    let tree_of = |id: gix::ObjectId| {
-        repo.find_commit(id)
-            .map_err(|e| e.to_string())
-            .and_then(|c| c.tree().map_err(|e| e.to_string()))
-    };
-    let changes = repo
-        .diff_tree_to_tree(Some(&tree_of(base)?), Some(&tree_of(head_oid)?), None)
-        .map_err(|e| e.to_string())?;
-    Ok(diff_files(&changes))
+    Ok((base, head_oid))
 }
 
 pub fn get_commit_diff(path: String, oid: String, file: String) -> Result<String, String> {
@@ -3262,6 +3323,55 @@ mod tests {
         let behind = temp_clone("behind");
         run_git(&behind, &["reset", "-q", "--hard", "HEAD"]).unwrap();
         assert!(get_push_files(behind.clone()).unwrap().is_empty());
+
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+    }
+
+    #[test]
+    fn push_diff_matches_outgoing_commits_and_uses_literal_paths() {
+        let work = temp_clone("diff");
+        let dir = std::path::Path::new(&work);
+        let file = "-变更 [1].txt";
+        std::fs::write(dir.join(file), "first local change\n").unwrap();
+        std::fs::write(dir.join("-变更 1.txt"), "other file\n").unwrap();
+        run_git(&work, &["add", "-A"]).unwrap();
+        run_git(&work, &["commit", "-qm", "first local change"]).unwrap();
+        std::fs::write(dir.join(file), "first local change\nsecond local change\n").unwrap();
+        run_git(&work, &["add", "--", file]).unwrap();
+        run_git(&work, &["commit", "-qm", "second local change"]).unwrap();
+
+        // Upstream diverges; its new file must not appear as a local deletion.
+        let seed = dir.parent().unwrap().join("seed");
+        let seed = seed.to_string_lossy().to_string();
+        std::fs::write(format!("{seed}/remote-only.txt"), "remote work\n").unwrap();
+        run_git(&seed, &["add", "remote-only.txt"]).unwrap();
+        run_git(&seed, &["commit", "-qm", "remote work"]).unwrap();
+        run_git(&seed, &["push", "-q", "origin", "master"]).unwrap();
+        run_git(&work, &["fetch", "-q", "origin"]).unwrap();
+
+        std::fs::write(dir.join(file), "staged only\n").unwrap();
+        run_git(&work, &["add", "--", file]).unwrap();
+        std::fs::write(dir.join(file), "unstaged only\n").unwrap();
+        let patch = get_push_diff(work.clone(), file.into()).unwrap();
+        assert!(patch.contains("+first local change\n"), "{patch}");
+        assert!(patch.contains("+second local change\n"), "{patch}");
+        assert!(!patch.contains("other file"), "{patch}");
+        assert!(!patch.contains("staged only"), "{patch}");
+        assert!(!patch.contains("unstaged only"), "{patch}");
+        assert!(!get_push_files(work.clone())
+            .unwrap()
+            .iter()
+            .any(|row| row.path == "remote-only.txt"));
+        assert!(get_push_diff(work.clone(), "remote-only.txt".into())
+            .unwrap()
+            .starts_with("（无文本差异"));
+
+        run_git(&work, &["mv", "shared.txt", "renamed.txt"]).unwrap();
+        run_git(&work, &["commit", "-qm", "rename shared file"]).unwrap();
+        let patch = get_push_diff(work.clone(), "renamed.txt".into()).unwrap();
+        assert!(patch.contains("rename from shared.txt\n"), "{patch}");
+        assert!(patch.contains("rename to renamed.txt\n"), "{patch}");
+        assert!(!patch.contains("new file mode"), "{patch}");
 
         let _ = std::fs::remove_dir_all(dir.parent().unwrap());
     }

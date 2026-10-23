@@ -160,6 +160,9 @@ Future<List<FileStatus>> getCommitFiles(
 Future<List<FileStatus>> getPushFiles({required String path}) =>
     RustLib.instance.api.crateApiGitGetPushFiles(path: path);
 
+Future<String> getPushDiff({required String path, required String file}) =>
+    RustLib.instance.api.crateApiGitGetPushDiff(path: path, file: file);
+
 Future<String> getCommitDiff(
         {required String path, required String oid, required String file}) =>
     RustLib.instance.api

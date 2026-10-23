@@ -24,6 +24,7 @@ class Prefs {
   static const _keyRecentRepos = 'cgit.recentRepos';
   static const _keyOpLog = 'cgit.opLog';
   static const _keyFlatChanges = 'cgit.flatChanges';
+  static const _keySkippedVersion = 'cgit.skippedVersion';
 
   /// How many repositories the 打开 menu remembers. Beyond this the list stops
   /// being a shortcut and becomes something to read.
@@ -84,6 +85,12 @@ class Prefs {
   /// 操作日志开关，默认关。
   bool get opLog => _store.getBool(_keyOpLog) ?? false;
   Future<void> setOpLog(bool v) => _store.setBool(_keyOpLog, v);
+
+  /// 用户点了「跳过此版本」的版本号。启动检查只对这一版保持安静，
+  /// 更高的版本仍会提示；手动检查不受影响。
+  String get skippedVersion => _store.getString(_keySkippedVersion) ?? '';
+  Future<void> setSkippedVersion(String v) =>
+      _store.setString(_keySkippedVersion, v);
 
   /* ---------- editors ---------- */
 

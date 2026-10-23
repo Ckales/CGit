@@ -23,8 +23,9 @@ jobs:
           pubspec=$(sed -n 's/^version:[[:space:]]*\([^+[:space:]]*\).*/\1/p' flutter_ui/pubspec.yaml)
           core=$(sed -n 's/^version = "\(.*\)"/\1/p' crates/cgit-core/Cargo.toml | head -n 1)
           bridge=$(sed -n 's/^version = "\(.*\)"/\1/p' flutter_ui/rust/Cargo.toml | head -n 1)
-          if [ "$version" != "$pubspec" ] || [ "$version" != "$core" ] || [ "$version" != "$bridge" ]; then
-            echo "::error::标签版本须与 pubspec.yaml、cgit-core 和 cgit_rust 的版本一致"
+          app=$(sed -n "s/^const appVersion = '\([^']*\)';$/\1/p" flutter_ui/lib/update_check.dart)
+          if [ "$version" != "$pubspec" ] || [ "$version" != "$core" ] || [ "$version" != "$bridge" ] || [ "$version" != "$app" ]; then
+            echo "::error::标签版本须与 pubspec.yaml、cgit-core、cgit_rust 和 appVersion 的版本一致"
             exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"

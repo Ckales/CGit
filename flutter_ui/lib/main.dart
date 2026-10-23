@@ -30,6 +30,7 @@ import 'rebase_plan.dart';
 import 'rebase_sheet.dart';
 import 'settings_sheet.dart';
 import 'theme.dart';
+import 'update_check.dart';
 import 'watch_debounce.dart';
 
 Future<void> main(List<String> args) async {
@@ -346,6 +347,11 @@ class _RepoScreenState extends State<RepoScreen> {
       if (mounted) setState(() => _ai = ai);
     });
     _loadEditorIcons();
+    // 启动时异步检查更新：不阻塞打开仓库，失败也不提示；只有真正有新版本
+    // 且用户没有跳过时才弹窗。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(checkForUpdateOnStartup(context, widget.prefs));
+    });
   }
 
   Future<void> _onSettingsSaved() async {

@@ -10,6 +10,7 @@ import 'git_text.dart';
 import 'op_log.dart';
 import 'prefs.dart';
 import 'theme.dart';
+import 'update_check.dart';
 
 /// 设置：通用 / 外观 / 编辑器 / Git 信息 / AI。
 ///
@@ -96,6 +97,11 @@ class _SettingsSheetState extends State<SettingsSheet> {
 
   String? _message;
   bool _messageIsError = false;
+
+  /* ---------- 版本 ---------- */
+  bool _updateBusy = false;
+  String _updateResult = '';
+  bool _updateFailed = false;
 
   @override
   void initState() {
@@ -527,7 +533,47 @@ class _SettingsSheetState extends State<SettingsSheet> {
             p,
             '记录状态栏的每条消息和 git 报错原文，排查问题用，默认关闭。'
             '写到 ${OpLog.path}，超过 5MB 轮转一次；远端地址里的账号和 Token 会替换成 <REDACTED>。'),
+        const SizedBox(height: 10),
+        _sectionTitle(p, '版本'),
+        _row(p, '当前版本', _value(p, 'v$appVersion')),
+        _testRow(
+          p,
+          '检查更新',
+          _updateBusy ? null : _checkUpdates,
+          _updateResult,
+          _updateFailed,
+        ),
+        _hint(
+            p,
+            '启动时会自动检查 GitHub 上的最新版本，发现新版本才提示。'
+            '「跳过此版本」只对当前版本静默，之后的新版本仍会提示。'),
       ];
+
+  Future<void> _checkUpdates() async {
+    setState(() {
+      _updateBusy = true;
+      _updateFailed = false;
+      _updateResult = '正在检查…';
+    });
+    try {
+      final release = await checkForUpdate();
+      if (!mounted) return;
+      if (release == null) {
+        setState(() => _updateResult = '已是最新版本（v$appVersion）');
+      } else {
+        setState(() => _updateResult = '发现新版本 v${release.version}');
+        await showUpdateDialog(context, release, prefs: widget.prefs);
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _updateResult = '检查失败：$e';
+        _updateFailed = true;
+      });
+    } finally {
+      if (mounted) setState(() => _updateBusy = false);
+    }
+  }
 
   Future<void> _openLogDir() async {
     try {

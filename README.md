@@ -20,6 +20,7 @@ CGit 是一款轻量的 Git 桌面客户端，提供变更、提交、历史、�
 - 查看提交图、分支与标签，按哈希、说明、作者和日期搜索，查看文件历史与逐行归属。
 - 管理分支、远端、标签和 stash；支持抓取、拉取、推送与克隆。
 - 处理 merge、rebase、cherry-pick、revert 和冲突；可打开包含多个仓库的工作区。
+- 启动时检查 GitHub 上的新版本，发现后可在应用内直接前往下载。
 - 可选用 AI 根据已暂存的 diff 生成提交说明。
 
 ## 实现方案
@@ -30,7 +31,7 @@ CGit 是一款轻量的 Git 桌面客户端，提供变更、提交、历史、�
 
 ## 发布与开发
 
-推送与三个应用版本号一致的 `vX.Y.Z` 标签后，GitHub Actions 自动构建 macOS DMG 和 Windows ZIP，并创建待人工检查的 Release 草稿。签名和公证凭据只通过 GitHub Secrets 提供；未配置时仍会生成未公证的 DMG。
+推送与 `pubspec.yaml`、两个 `Cargo.toml` 和 `flutter_ui/lib/update_check.dart` 中 `appVersion` 一致的 `vX.Y.Z` 标签后，GitHub Actions 自动构建 macOS DMG 和 Windows ZIP，并创建待人工检查的 Release 草稿。签名和公证凭据只通过 GitHub Secrets 提供；未配置时仍会生成未公证的 DMG。
 
 从源码运行、测试和构建请看 [Flutter 开发说明](flutter_ui/README.md)。欢迎在 [Issues](https://github.com/Ckales/CGit/issues) 反馈问题或提交 Pull Request。
 

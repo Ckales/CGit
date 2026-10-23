@@ -53,7 +53,7 @@ Future<void> checkForUpdateOnStartup(BuildContext context, Prefs prefs) async {
   if (release == null) return;
   if (!context.mounted) return;
   if (prefs.skippedVersion == release.version) return;
-  await showUpdateDialog(context, release, prefs: prefs);
+  await showUpdateDialog(context, release: release, prefs: prefs);
 }
 
 Future<AppRelease> _fetchLatestRelease() async {

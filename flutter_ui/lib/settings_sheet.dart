@@ -562,7 +562,7 @@ class _SettingsSheetState extends State<SettingsSheet> {
         setState(() => _updateResult = '已是最新版本（v$appVersion）');
       } else {
         setState(() => _updateResult = '发现新版本 v${release.version}');
-        await showUpdateDialog(context, release, prefs: widget.prefs);
+        await showUpdateDialog(context, release: release, prefs: widget.prefs);
       }
     } catch (e) {
       if (!mounted) return;

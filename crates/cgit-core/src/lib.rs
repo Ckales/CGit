@@ -2563,11 +2563,13 @@ pub fn ai_chat(
     // Options go in on stdin, so the token never appears in the process list.
     let config = curl_config(&url, &token, &body);
 
-    let mut child = Command::new("curl")
-        .args(["--config", "-"])
+    let mut curl = Command::new("curl");
+    curl.args(["--config", "-"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+    no_console(&mut curl);
+    let mut child = curl
         .spawn()
         .map_err(|e| format!("运行 curl 失败：{e}"))?;
     child
@@ -2648,8 +2650,21 @@ fn clip(text: &str) -> String {
 fn git_cmd() -> Command {
     let mut cmd = Command::new("git");
     cmd.env("GIT_TERMINAL_PROMPT", "0");
+    no_console(&mut cmd);
     cmd
 }
+
+/// git.exe / curl.exe 是控制台程序：本进程是 GUI 没有控制台，Windows 就会给
+/// 子进程新开一个黑窗口闪一下。stdio 全走管道，子进程并不需要控制台。
+#[cfg(windows)]
+fn no_console(cmd: &mut Command) {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    cmd.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(windows))]
+fn no_console(_cmd: &mut Command) {}
 
 fn run_git(path: &str, args: &[&str]) -> Result<String, String> {
     let output = git_cmd()

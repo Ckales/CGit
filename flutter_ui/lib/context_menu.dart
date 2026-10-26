@@ -26,7 +26,8 @@ class MenuAction {
       this.enabled = true,
       this.checked = false,
       this.current = false,
-      this.sublabel = ''})
+      this.sublabel = '',
+      this.onRemove})
       : header = false;
 
   /// A non-clickable group title ("最近的项目"). Every header after the first
@@ -38,6 +39,7 @@ class MenuAction {
         checked = false,
         current = false,
         sublabel = '',
+        onRemove = null,
         header = true;
 
   final String label;
@@ -60,6 +62,9 @@ class MenuAction {
 
   /// A second, dimmer line under the label — the path under a project name.
   final String sublabel;
+
+  /// 悬停时显示移除按钮，保存成功后从当前菜单移除这一项。
+  final Future<void> Function()? onRemove;
 
   final bool header;
 
@@ -101,20 +106,39 @@ Future<void> showRepoMenu({
   // InheritedTheme, so it doesn't follow the menu there.
   final navigator = Navigator.of(context);
   final overlay = navigator.overlay!.context.findRenderObject() as RenderBox;
-  // The tick column is only reserved in menus that tick something, or every
-  // plain menu would carry a blank gutter.
-  final hasChecks = items.any((i) => i.checked);
+  final remaining = [...items];
 
   final picked = await navigator.push(_MenuRoute(
     anchor: overlay.globalToLocal(position),
     alignRight: alignRight,
     palette: p,
-    entries: [
-      for (var i = 0; i < items.length; i++)
-        items[i].header
-            ? _MenuHeader(items[i].label, palette: p, first: i == 0)
-            : _MenuRow(items[i], palette: p, hasChecks: hasChecks),
-    ],
+    child: StatefulBuilder(builder: (context, setState) {
+      // Only menus with a checked entry need the tick column.
+      final hasChecks = remaining.any((item) => item.checked);
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (final (i, item) in remaining.indexed)
+            // 移除分组的最后一项时，一并隐藏空标题。
+            if (!item.header ||
+                (i + 1 < remaining.length && !remaining[i + 1].header))
+              item.header
+                  ? _MenuHeader(item.label, palette: p, first: i == 0)
+                  : _MenuRow(
+                      item,
+                      palette: p,
+                      hasChecks: hasChecks,
+                      onRemove: item.onRemove == null
+                          ? null
+                          : () async {
+                              await item.onRemove!();
+                              if (!context.mounted) return;
+                              setState(() => remaining.remove(item));
+                            },
+                    ),
+        ],
+      );
+    }),
   ));
 
   picked?.onTap();
@@ -125,13 +149,13 @@ class _MenuRoute extends PopupRoute<MenuAction> {
     required this.anchor,
     required this.alignRight,
     required this.palette,
-    required this.entries,
+    required this.child,
   });
 
   final Offset anchor;
   final bool alignRight;
   final Palette palette;
-  final List<Widget> entries;
+  final Widget child;
 
   @override
   Color? get barrierColor => null;
@@ -168,10 +192,7 @@ class _MenuRoute extends PopupRoute<MenuAction> {
               child: IntrinsicWidth(
                 child: SingleChildScrollView(
                   padding: const EdgeInsets.all(4),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: entries,
-                  ),
+                  child: child,
                 ),
               ),
             ),
@@ -313,11 +334,13 @@ class _MenuHeaderState extends State<_MenuHeader> {
 }
 
 class _MenuRow extends PopupMenuEntry<MenuAction> {
-  const _MenuRow(this.item, {required this.palette, required this.hasChecks});
+  const _MenuRow(this.item,
+      {required this.palette, required this.hasChecks, this.onRemove});
 
   final MenuAction item;
   final Palette palette;
   final bool hasChecks;
+  final Future<void> Function()? onRemove;
 
   @override
   double get height => item.sublabel.isEmpty ? 26 : 40;
@@ -401,6 +424,21 @@ class _MenuRowState extends State<_MenuRow> {
                   ],
                 ),
               ),
+              if (widget.onRemove != null)
+                SizedBox(
+                  width: 24,
+                  height: 24,
+                  child: hot
+                      ? IconButton(
+                          tooltip: '从最近项目中移除',
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(),
+                          icon: const Icon(Icons.close, size: 14),
+                          color: Colors.white,
+                          onPressed: widget.onRemove,
+                        )
+                      : null,
+                ),
             ],
           ),
         ),

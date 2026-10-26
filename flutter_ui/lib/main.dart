@@ -2147,6 +2147,7 @@ class _RepoScreenState extends State<RepoScreen> {
               () => _openRepo(path),
               sublabel: _prettyPath(path),
               current: path == _workspaceRoot,
+              onRemove: () => widget.prefs.forgetRepo(path),
             ),
         ],
       ],

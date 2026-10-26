@@ -137,8 +137,7 @@ class Prefs {
     );
   }
 
-  /// Drop a path that no longer resolves — a repo that was moved or deleted is
-  /// worse than useless in a shortcut list.
+  /// 从最近项目列表移除路径，保留磁盘文件和项目设置。
   Future<void> forgetRepo(String path) => _store.setStringList(
         _keyRecentRepos,
         recentRepos.where((p) => p != path).toList(),

@@ -2764,15 +2764,42 @@ fn has_upstream(repo: &Repository, name: &str) -> bool {
     upstream_ref_name(repo, name).is_some()
 }
 
-/// Bring a branch up to date with its upstream without checking it out — the
-/// branch menu's 更新 on a branch that is not the current one. A refspec fetch
-/// moves the local ref only when it fast-forwards, so a diverged branch is
-/// reported instead of being quietly rewritten.
-
+/// Fast-forward a branch from its upstream. A checked-out branch needs pull
+/// so its index and worktree move with HEAD. Never change another worktree;
+/// an unchecked branch can be updated directly with a non-forcing fetch.
 pub fn update_branch(path: &str, name: &str) -> Result<String, String> {
     let repo = open(path)?;
     let (remote, on_remote) = upstream_parts(&repo, name)?;
-    run_git(path, &["fetch", &remote, &format!("{on_remote}:{name}")])
+    if head_branch_name(&repo).as_deref() == Some(name) {
+        return git_pull(path.to_string(), None);
+    }
+
+    let branch_ref = format!("refs/heads/{name}");
+    // NUL-delimited porcelain preserves spaces, newlines and non-ASCII paths.
+    let worktrees = run_git(path, &["worktree", "list", "--porcelain", "-z"])?;
+    for entry in worktrees.split("\0\0") {
+        let mut worktree = None;
+        let mut branch = None;
+        for field in entry.split('\0') {
+            if let Some(value) = field.strip_prefix("worktree ") {
+                worktree = Some(value);
+            } else if let Some(value) = field.strip_prefix("branch ") {
+                branch = Some(value);
+            }
+        }
+        if branch == Some(branch_ref.as_str()) {
+            if let Some(worktree) = worktree {
+                return Err(format!(
+                    "分支「{name}」正在工作区「{worktree}」中使用，请在该工作区执行更新。"
+                ));
+            }
+        }
+    }
+
+    run_git(
+        path,
+        &["fetch", &remote, &format!("refs/heads/{on_remote}:{branch_ref}")],
+    )
 }
 
 /// Push one branch without checking it out. With an upstream it pushes to that

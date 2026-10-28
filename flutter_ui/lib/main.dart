@@ -1138,7 +1138,7 @@ class _RepoScreenState extends State<RepoScreen> {
           BranchCommand.mergeInto =>
             _stashAction('合并 ${b.name}', () => _git!.mergeBranch(b.name)),
           BranchCommand.update =>
-            _stashAction('更新 ${b.name}', () => _git!.updateBranch(b.name)),
+            _network('更新 ${b.name}', () => _git!.updateBranch(b.name)),
           BranchCommand.push =>
             _network('推送 ${b.name}', () => _git!.pushBranch(b.name)),
           BranchCommand.applyPatchFromFile => _applyPatchFromFile(),

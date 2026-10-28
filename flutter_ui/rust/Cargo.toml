@@ -1,6 +1,6 @@
 [package]
 name = "cgit_rust"
-version = "1.0.2"
+version = "1.0.3"
 description = "flutter_rust_bridge surface over cgit-core"
 authors = ["Ckales"]
 license = "MIT"

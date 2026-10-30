@@ -409,6 +409,11 @@ class Git {
   Future<String> deleteTag(String name) =>
       _guard(() => rust.deleteTag(path: repo, name: name));
 
+  /// Deletes origin's copy first: when the push is refused, the local tag is
+  /// still there rather than half the operation having happened.
+  Future<String> deleteLocalAndRemoteTag(String name) =>
+      _guard(() => rust.deleteLocalAndRemoteTag(path: repo, name: name));
+
   /// Write a patch to disk. Core does the writing.
   Future<void> savePatch(String file, String content) =>
       _guard(() => rust.savePatch(file: file, content: content));

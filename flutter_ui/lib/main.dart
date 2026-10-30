@@ -2312,11 +2312,21 @@ class _RepoScreenState extends State<RepoScreen> {
                 MenuAction('推送标签到远端',
                     () => _network('推送标签 $tag', () => _git!.pushTag(tag))),
                 MenuAction(
-                  '删除标签',
+                  '删除本地标签',
                   () => _stashAction(
-                    '删除标签 $tag',
+                    '删除本地标签 $tag',
                     () => _git!.deleteTag(tag),
                     confirm: '删除本地标签「$tag」？远端上的同名标签不受影响。',
+                  ),
+                  danger: true,
+                ),
+                MenuAction(
+                  '删除本地及远程标签',
+                  () => _stashAction(
+                    '删除本地及远程标签 $tag',
+                    () => _git!.deleteLocalAndRemoteTag(tag),
+                    confirm:
+                        '删除本地标签「$tag」，并删除远端 origin 上的同名标签？这会改动远端仓库，其他人也会看到。',
                   ),
                   danger: true,
                 ),

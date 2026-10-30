@@ -39,7 +39,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.13.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -118628178;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1718015611;
 
 // Section: executor
 
@@ -542,6 +542,41 @@ fn wire__crate__api__git__delete_branch_impl(
             move |context| {
                 transform_result_sse::<_, String>((move || {
                     let output_ok = crate::api::git::delete_branch(api_path, api_name)?;
+                    std::result::Result::Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__git__delete_local_and_remote_tag_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "delete_local_and_remote_tag",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_path = <String>::sse_decode(&mut deserializer);
+            let api_name = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok =
+                        crate::api::git::delete_local_and_remote_tag(api_path, api_name)?;
                     std::result::Result::Ok(output_ok)
                 })())
             }
@@ -3468,75 +3503,81 @@ fn pde_ffi_dispatcher_primary_impl(
         12 => wire__crate__api__git__create_patch_impl(port, ptr, rust_vec_len, data_len),
         13 => wire__crate__api__git__create_tag_impl(port, ptr, rust_vec_len, data_len),
         14 => wire__crate__api__git__delete_branch_impl(port, ptr, rust_vec_len, data_len),
-        15 => wire__crate__api__git__delete_remote_branch_impl(port, ptr, rust_vec_len, data_len),
-        16 => wire__crate__api__git__delete_tag_impl(port, ptr, rust_vec_len, data_len),
-        17 => wire__crate__api__git__discard_changes_impl(port, ptr, rust_vec_len, data_len),
-        18 => wire__crate__api__git__editor_icon_impl(port, ptr, rust_vec_len, data_len),
-        19 => wire__crate__api__git__get_blame_impl(port, ptr, rust_vec_len, data_len),
-        20 => wire__crate__api__git__get_branch_tracking_impl(port, ptr, rust_vec_len, data_len),
-        21 => wire__crate__api__git__get_branches_impl(port, ptr, rust_vec_len, data_len),
-        22 => wire__crate__api__git__get_commit_diff_impl(port, ptr, rust_vec_len, data_len),
-        23 => wire__crate__api__git__get_commit_files_impl(port, ptr, rust_vec_len, data_len),
-        24 => wire__crate__api__git__get_commit_messages_impl(port, ptr, rust_vec_len, data_len),
-        25 => wire__crate__api__git__get_conflicts_impl(port, ptr, rust_vec_len, data_len),
-        26 => wire__crate__api__git__get_file_history_impl(port, ptr, rust_vec_len, data_len),
-        27 => wire__crate__api__git__get_git_credential_impl(port, ptr, rust_vec_len, data_len),
-        28 => wire__crate__api__git__get_graph_impl(port, ptr, rust_vec_len, data_len),
-        29 => wire__crate__api__git__get_head_message_impl(port, ptr, rust_vec_len, data_len),
-        30 => wire__crate__api__git__get_hunks_impl(port, ptr, rust_vec_len, data_len),
-        31 => wire__crate__api__git__get_identity_impl(port, ptr, rust_vec_len, data_len),
-        32 => wire__crate__api__git__get_pull_rebase_impl(port, ptr, rust_vec_len, data_len),
-        33 => wire__crate__api__git__get_push_diff_impl(port, ptr, rust_vec_len, data_len),
-        34 => wire__crate__api__git__get_push_files_impl(port, ptr, rust_vec_len, data_len),
-        35 => wire__crate__api__git__get_rebase_todo_impl(port, ptr, rust_vec_len, data_len),
-        36 => wire__crate__api__git__get_remote_branches_impl(port, ptr, rust_vec_len, data_len),
-        37 => wire__crate__api__git__get_remotes_impl(port, ptr, rust_vec_len, data_len),
-        38 => wire__crate__api__git__get_repo_state_impl(port, ptr, rust_vec_len, data_len),
-        39 => wire__crate__api__git__get_staged_diff_impl(port, ptr, rust_vec_len, data_len),
-        40 => wire__crate__api__git__get_status_impl(port, ptr, rust_vec_len, data_len),
-        41 => wire__crate__api__git__get_tags_impl(port, ptr, rust_vec_len, data_len),
-        42 => wire__crate__api__git__get_unstaged_diff_impl(port, ptr, rust_vec_len, data_len),
-        43 => wire__crate__api__git__git_fetch_impl(port, ptr, rust_vec_len, data_len),
-        44 => wire__crate__api__git__git_pull_impl(port, ptr, rust_vec_len, data_len),
-        45 => wire__crate__api__git__git_push_impl(port, ptr, rust_vec_len, data_len),
-        46 => wire__crate__api__git__git_push_force_impl(port, ptr, rust_vec_len, data_len),
-        47 => wire__crate__api__git__list_editors_impl(port, ptr, rust_vec_len, data_len),
-        48 => wire__crate__api__git__merge_branch_impl(port, ptr, rust_vec_len, data_len),
-        49 => wire__crate__api__git__op_action_impl(port, ptr, rust_vec_len, data_len),
-        50 => wire__crate__api__git__open_in_editor_impl(port, ptr, rust_vec_len, data_len),
-        51 => wire__crate__api__git__open_path_impl(port, ptr, rust_vec_len, data_len),
-        52 => wire__crate__api__git__open_project_with_file_impl(port, ptr, rust_vec_len, data_len),
-        53 => wire__crate__api__watch__open_workspace_impl(port, ptr, rust_vec_len, data_len),
-        54 => wire__crate__api__git__push_branch_impl(port, ptr, rust_vec_len, data_len),
-        55 => wire__crate__api__git__push_tag_impl(port, ptr, rust_vec_len, data_len),
-        56 => wire__crate__api__git__read_clipboard_impl(port, ptr, rust_vec_len, data_len),
-        57 => wire__crate__api__git__read_patch_file_impl(port, ptr, rust_vec_len, data_len),
-        58 => wire__crate__api__git__read_worktree_file_impl(port, ptr, rust_vec_len, data_len),
-        59 => wire__crate__api__git__rebase_interactive_impl(port, ptr, rust_vec_len, data_len),
-        60 => wire__crate__api__git__remove_remote_impl(port, ptr, rust_vec_len, data_len),
-        61 => wire__crate__api__git__rename_branch_impl(port, ptr, rust_vec_len, data_len),
-        62 => wire__crate__api__git__reset_to_impl(port, ptr, rust_vec_len, data_len),
-        63 => wire__crate__api__git__resolve_conflict_impl(port, ptr, rust_vec_len, data_len),
-        64 => wire__crate__api__git__resolve_with_content_impl(port, ptr, rust_vec_len, data_len),
-        65 => wire__crate__api__git__revert_commit_impl(port, ptr, rust_vec_len, data_len),
-        66 => wire__crate__api__git__save_git_credential_impl(port, ptr, rust_vec_len, data_len),
-        67 => wire__crate__api__git__save_patch_impl(port, ptr, rust_vec_len, data_len),
-        68 => wire__crate__api__git__search_commits_impl(port, ptr, rust_vec_len, data_len),
-        69 => wire__crate__api__git__set_conflict_style_impl(port, ptr, rust_vec_len, data_len),
-        70 => wire__crate__api__git__set_identity_impl(port, ptr, rust_vec_len, data_len),
-        71 => wire__crate__api__git__stage_all_impl(port, ptr, rust_vec_len, data_len),
-        72 => wire__crate__api__git__stage_file_impl(port, ptr, rust_vec_len, data_len),
-        73 => wire__crate__api__git__stash_drop_impl(port, ptr, rust_vec_len, data_len),
-        74 => wire__crate__api__git__stash_list_impl(port, ptr, rust_vec_len, data_len),
-        75 => wire__crate__api__git__stash_pop_impl(port, ptr, rust_vec_len, data_len),
-        76 => wire__crate__api__git__stash_save_impl(port, ptr, rust_vec_len, data_len),
-        77 => wire__crate__api__git__stash_staged_impl(port, ptr, rust_vec_len, data_len),
-        78 => wire__crate__api__git__test_git_credential_impl(port, ptr, rust_vec_len, data_len),
-        79 => wire__crate__api__git__unstage_all_impl(port, ptr, rust_vec_len, data_len),
-        80 => wire__crate__api__git__unstage_file_impl(port, ptr, rust_vec_len, data_len),
-        81 => wire__crate__api__git__update_branch_impl(port, ptr, rust_vec_len, data_len),
-        82 => wire__crate__api__watch__watch_repo_impl(port, ptr, rust_vec_len, data_len),
-        83 => wire__crate__api__git__write_clipboard_impl(port, ptr, rust_vec_len, data_len),
+        15 => wire__crate__api__git__delete_local_and_remote_tag_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        16 => wire__crate__api__git__delete_remote_branch_impl(port, ptr, rust_vec_len, data_len),
+        17 => wire__crate__api__git__delete_tag_impl(port, ptr, rust_vec_len, data_len),
+        18 => wire__crate__api__git__discard_changes_impl(port, ptr, rust_vec_len, data_len),
+        19 => wire__crate__api__git__editor_icon_impl(port, ptr, rust_vec_len, data_len),
+        20 => wire__crate__api__git__get_blame_impl(port, ptr, rust_vec_len, data_len),
+        21 => wire__crate__api__git__get_branch_tracking_impl(port, ptr, rust_vec_len, data_len),
+        22 => wire__crate__api__git__get_branches_impl(port, ptr, rust_vec_len, data_len),
+        23 => wire__crate__api__git__get_commit_diff_impl(port, ptr, rust_vec_len, data_len),
+        24 => wire__crate__api__git__get_commit_files_impl(port, ptr, rust_vec_len, data_len),
+        25 => wire__crate__api__git__get_commit_messages_impl(port, ptr, rust_vec_len, data_len),
+        26 => wire__crate__api__git__get_conflicts_impl(port, ptr, rust_vec_len, data_len),
+        27 => wire__crate__api__git__get_file_history_impl(port, ptr, rust_vec_len, data_len),
+        28 => wire__crate__api__git__get_git_credential_impl(port, ptr, rust_vec_len, data_len),
+        29 => wire__crate__api__git__get_graph_impl(port, ptr, rust_vec_len, data_len),
+        30 => wire__crate__api__git__get_head_message_impl(port, ptr, rust_vec_len, data_len),
+        31 => wire__crate__api__git__get_hunks_impl(port, ptr, rust_vec_len, data_len),
+        32 => wire__crate__api__git__get_identity_impl(port, ptr, rust_vec_len, data_len),
+        33 => wire__crate__api__git__get_pull_rebase_impl(port, ptr, rust_vec_len, data_len),
+        34 => wire__crate__api__git__get_push_diff_impl(port, ptr, rust_vec_len, data_len),
+        35 => wire__crate__api__git__get_push_files_impl(port, ptr, rust_vec_len, data_len),
+        36 => wire__crate__api__git__get_rebase_todo_impl(port, ptr, rust_vec_len, data_len),
+        37 => wire__crate__api__git__get_remote_branches_impl(port, ptr, rust_vec_len, data_len),
+        38 => wire__crate__api__git__get_remotes_impl(port, ptr, rust_vec_len, data_len),
+        39 => wire__crate__api__git__get_repo_state_impl(port, ptr, rust_vec_len, data_len),
+        40 => wire__crate__api__git__get_staged_diff_impl(port, ptr, rust_vec_len, data_len),
+        41 => wire__crate__api__git__get_status_impl(port, ptr, rust_vec_len, data_len),
+        42 => wire__crate__api__git__get_tags_impl(port, ptr, rust_vec_len, data_len),
+        43 => wire__crate__api__git__get_unstaged_diff_impl(port, ptr, rust_vec_len, data_len),
+        44 => wire__crate__api__git__git_fetch_impl(port, ptr, rust_vec_len, data_len),
+        45 => wire__crate__api__git__git_pull_impl(port, ptr, rust_vec_len, data_len),
+        46 => wire__crate__api__git__git_push_impl(port, ptr, rust_vec_len, data_len),
+        47 => wire__crate__api__git__git_push_force_impl(port, ptr, rust_vec_len, data_len),
+        48 => wire__crate__api__git__list_editors_impl(port, ptr, rust_vec_len, data_len),
+        49 => wire__crate__api__git__merge_branch_impl(port, ptr, rust_vec_len, data_len),
+        50 => wire__crate__api__git__op_action_impl(port, ptr, rust_vec_len, data_len),
+        51 => wire__crate__api__git__open_in_editor_impl(port, ptr, rust_vec_len, data_len),
+        52 => wire__crate__api__git__open_path_impl(port, ptr, rust_vec_len, data_len),
+        53 => wire__crate__api__git__open_project_with_file_impl(port, ptr, rust_vec_len, data_len),
+        54 => wire__crate__api__watch__open_workspace_impl(port, ptr, rust_vec_len, data_len),
+        55 => wire__crate__api__git__push_branch_impl(port, ptr, rust_vec_len, data_len),
+        56 => wire__crate__api__git__push_tag_impl(port, ptr, rust_vec_len, data_len),
+        57 => wire__crate__api__git__read_clipboard_impl(port, ptr, rust_vec_len, data_len),
+        58 => wire__crate__api__git__read_patch_file_impl(port, ptr, rust_vec_len, data_len),
+        59 => wire__crate__api__git__read_worktree_file_impl(port, ptr, rust_vec_len, data_len),
+        60 => wire__crate__api__git__rebase_interactive_impl(port, ptr, rust_vec_len, data_len),
+        61 => wire__crate__api__git__remove_remote_impl(port, ptr, rust_vec_len, data_len),
+        62 => wire__crate__api__git__rename_branch_impl(port, ptr, rust_vec_len, data_len),
+        63 => wire__crate__api__git__reset_to_impl(port, ptr, rust_vec_len, data_len),
+        64 => wire__crate__api__git__resolve_conflict_impl(port, ptr, rust_vec_len, data_len),
+        65 => wire__crate__api__git__resolve_with_content_impl(port, ptr, rust_vec_len, data_len),
+        66 => wire__crate__api__git__revert_commit_impl(port, ptr, rust_vec_len, data_len),
+        67 => wire__crate__api__git__save_git_credential_impl(port, ptr, rust_vec_len, data_len),
+        68 => wire__crate__api__git__save_patch_impl(port, ptr, rust_vec_len, data_len),
+        69 => wire__crate__api__git__search_commits_impl(port, ptr, rust_vec_len, data_len),
+        70 => wire__crate__api__git__set_conflict_style_impl(port, ptr, rust_vec_len, data_len),
+        71 => wire__crate__api__git__set_identity_impl(port, ptr, rust_vec_len, data_len),
+        72 => wire__crate__api__git__stage_all_impl(port, ptr, rust_vec_len, data_len),
+        73 => wire__crate__api__git__stage_file_impl(port, ptr, rust_vec_len, data_len),
+        74 => wire__crate__api__git__stash_drop_impl(port, ptr, rust_vec_len, data_len),
+        75 => wire__crate__api__git__stash_list_impl(port, ptr, rust_vec_len, data_len),
+        76 => wire__crate__api__git__stash_pop_impl(port, ptr, rust_vec_len, data_len),
+        77 => wire__crate__api__git__stash_save_impl(port, ptr, rust_vec_len, data_len),
+        78 => wire__crate__api__git__stash_staged_impl(port, ptr, rust_vec_len, data_len),
+        79 => wire__crate__api__git__test_git_credential_impl(port, ptr, rust_vec_len, data_len),
+        80 => wire__crate__api__git__unstage_all_impl(port, ptr, rust_vec_len, data_len),
+        81 => wire__crate__api__git__unstage_file_impl(port, ptr, rust_vec_len, data_len),
+        82 => wire__crate__api__git__update_branch_impl(port, ptr, rust_vec_len, data_len),
+        83 => wire__crate__api__watch__watch_repo_impl(port, ptr, rust_vec_len, data_len),
+        84 => wire__crate__api__git__write_clipboard_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }

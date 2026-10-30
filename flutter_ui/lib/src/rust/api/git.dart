@@ -55,6 +55,11 @@ Future<String> createTag(
 Future<String> deleteTag({required String path, required String name}) =>
     RustLib.instance.api.crateApiGitDeleteTag(path: path, name: name);
 
+Future<String> deleteLocalAndRemoteTag(
+        {required String path, required String name}) =>
+    RustLib.instance.api
+        .crateApiGitDeleteLocalAndRemoteTag(path: path, name: name);
+
 Future<String> pushTag({required String path, required String name}) =>
     RustLib.instance.api.crateApiGitPushTag(path: path, name: name);
 

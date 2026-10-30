@@ -587,6 +587,23 @@ pub fn delete_tag(path: String, name: String) -> Result<String, String> {
     run_git(&path, &["tag", "-d", name.as_str()])
 }
 
+/// Delete the tag locally and on origin. A tag that was never pushed is only
+/// removed locally instead of failing the whole action. The remote goes first:
+/// if the push is refused (offline, no permission) the local tag survives, so
+/// the user never ends up with half a deletion.
+pub fn delete_local_and_remote_tag(path: String, name: String) -> Result<String, String> {
+    let remote_ref = format!("refs/tags/{name}");
+    let existing = run_git(&path, &["ls-remote", "--tags", "origin", remote_ref.as_str()])?;
+    let mut out = String::new();
+    if !existing.trim().is_empty() {
+        // An explicit refspec keeps a branch of the same name out of the way.
+        let delete_ref = format!(":{remote_ref}");
+        out.push_str(&run_git(&path, &["push", "origin", delete_ref.as_str()])?);
+    }
+    out.push_str(&delete_tag(path, name)?);
+    Ok(out)
+}
+
 pub fn push_tag(path: String, name: String) -> Result<String, String> {
     run_git(&path, &["push", "origin", name.as_str()])
 }
@@ -3784,6 +3801,36 @@ mod tests {
                 .trim(),
             "HEAD"
         );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn deleting_a_tag_locally_and_remotely_removes_it_from_origin() {
+        let work = temp_clone("tag-delete");
+        let root = std::path::Path::new(&work).parent().unwrap().to_path_buf();
+        let bare = root.join("remote.git").to_string_lossy().to_string();
+
+        create_tag(work.clone(), "v1".into(), String::new(), None).unwrap();
+        push_tag(work.clone(), "v1".into()).unwrap();
+        assert!(run_git(&bare, &["rev-parse", "refs/tags/v1"]).is_ok());
+
+        delete_local_and_remote_tag(work.clone(), "v1".into()).unwrap();
+        assert!(get_tags(work.clone()).unwrap().is_empty());
+        assert!(run_git(&bare, &["rev-parse", "refs/tags/v1"]).is_err());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn deleting_a_never_pushed_tag_everywhere_still_clears_the_local_one() {
+        let work = temp_clone("tag-delete-unpushed");
+        let root = std::path::Path::new(&work).parent().unwrap().to_path_buf();
+
+        create_tag(work.clone(), "v2".into(), String::new(), None).unwrap();
+
+        delete_local_and_remote_tag(work.clone(), "v2".into()).unwrap();
+        assert!(get_tags(work.clone()).unwrap().is_empty());
 
         let _ = std::fs::remove_dir_all(&root);
     }

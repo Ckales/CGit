@@ -182,6 +182,10 @@ pub fn delete_tag(path: String, name: String) -> Result<String, String> {
     cgit_core::delete_tag(path, name)
 }
 
+pub fn delete_local_and_remote_tag(path: String, name: String) -> Result<String, String> {
+    cgit_core::delete_local_and_remote_tag(path, name)
+}
+
 pub fn push_tag(path: String, name: String) -> Result<String, String> {
     cgit_core::push_tag(path, name)
 }

@@ -3252,7 +3252,7 @@ class _SectionHead extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(10, 10, 6, 6),
+      padding: const EdgeInsets.fromLTRB(14, 10, 6, 6),
       child: Row(
         children: [
           Text(
@@ -3469,7 +3469,7 @@ class _SidebarRowState extends State<_SidebarRow> {
             : (_) => widget.onTapAt!(menuAnchorBelow(context)),
         child: Container(
           height: 26,
-          padding: EdgeInsets.only(left: 10 + widget.indent, right: 10),
+          padding: EdgeInsets.only(left: 14 + widget.indent, right: 10),
           color: widget.active
               ? p.bgSel
               : _hover

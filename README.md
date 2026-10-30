@@ -10,7 +10,7 @@ CGit 是一款轻量的 Git 桌面客户端，提供变更、提交、历史、�
 ## 下载与安装
 
 - **macOS 12+**：下载 `.dmg`，将 `CGit.app` 拖到“应用程序”。安装包同时包含 Apple Silicon 和 Intel 版本。
-- **Windows x64（预览）**：下载 Windows `.zip`，完整解压后运行 `CGit/CGit.exe`，不要单独取出 EXE。
+- **Windows x64（预览）**：下载 `CGit-版本号-windows-x64-Setup.exe` 并运行安装向导。默认安装到当前用户目录，无需管理员权限；安装后从开始菜单启动，可在 Windows 设置中卸载。后续版本运行安装包即可覆盖升级。
 
 两端均需安装可从命令行调用的 [Git](https://git-scm.com/downloads)；Windows 请安装 Git for Windows。未公证的 macOS 包首次打开时可能被 Gatekeeper 阻止，确认下载来源后可在“系统设置 → 隐私与安全性”中允许打开。
 
@@ -31,7 +31,7 @@ CGit 是一款轻量的 Git 桌面客户端，提供变更、提交、历史、�
 
 ## 发布与开发
 
-推送与 `pubspec.yaml`、两个 `Cargo.toml` 和 `flutter_ui/lib/update_check.dart` 中 `appVersion` 一致的 `vX.Y.Z` 标签后，GitHub Actions 自动构建 macOS DMG 和 Windows ZIP，并创建待人工检查的 Release 草稿。签名和公证凭据只通过 GitHub Secrets 提供；未配置时仍会生成未公证的 DMG。
+推送与 `pubspec.yaml`、两个 `Cargo.toml` 和 `flutter_ui/lib/update_check.dart` 中 `appVersion` 一致的 `vX.Y.Z` 标签后，GitHub Actions 自动构建 macOS DMG 和 Windows EXE 安装包，并创建待人工检查的 Release 草稿。签名和公证凭据只通过 GitHub Secrets 提供；未配置时仍会生成未公证的 DMG。
 
 从源码运行、测试和构建请看 [Flutter 开发说明](flutter_ui/README.md)。欢迎在 [Issues](https://github.com/Ckales/CGit/issues) 反馈问题或提交 Pull Request。
 

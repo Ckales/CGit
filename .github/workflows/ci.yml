@@ -36,3 +36,17 @@ jobs:
       - name: Flutter 检查与构建
         working-directory: flutter_ui
         run: flutter analyze && flutter test && flutter build windows --release
+      - name: 安装 Inno Setup
+        shell: pwsh
+        run: |
+          $compiler = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6/ISCC.exe'
+          if (-not (Test-Path $compiler)) {
+            choco install innosetup --version=6.4.3 --yes --no-progress
+            if ($LASTEXITCODE -ne 0) { throw 'Inno Setup 安装失败' }
+          }
+      - name: 制作 Windows 安装包
+        shell: pwsh
+        run: ./flutter_ui/tool/package_windows.ps1
+      - name: 验证安装、重复安装与卸载
+        shell: pwsh
+        run: ./flutter_ui/tool/test_windows_installer.ps1 -Installer (Get-Item dist/*-Setup.exe).FullName

@@ -133,28 +133,24 @@ jobs:
       - name: 构建 Windows
         working-directory: flutter_ui
         run: flutter build windows --release
-      - name: 打包完整运行目录
+      - name: 安装 Inno Setup
         shell: pwsh
         run: |
-          $release = 'flutter_ui/build/windows/x64/runner/Release'
-          if (-not (Test-Path "$release/CGit.exe")) { throw '找不到 CGit.exe' }
-          New-Item -ItemType Directory -Force dist/CGit | Out-Null
-          Copy-Item -Path "$release/*" -Destination dist/CGit -Recurse -Force
-          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
-          $vsInstall = & $vswhere -latest -products * -property installationPath
-          $redist = Join-Path $vsInstall 'VC/Redist/MSVC'
-          foreach ($dll in @('msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll')) {
-            $source = Get-ChildItem $redist -Recurse -Filter $dll |
-              Where-Object { $_.FullName -match '\\x64\\Microsoft\.VC\d+\.CRT\\' } |
-              Sort-Object FullName -Descending | Select-Object -First 1
-            if (-not $source) { throw "缺少 VC++ 运行库：$dll" }
-            Copy-Item $source.FullName dist/CGit/
+          $compiler = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6/ISCC.exe'
+          if (-not (Test-Path $compiler)) {
+            choco install innosetup --version=6.4.3 --yes --no-progress
+            if ($LASTEXITCODE -ne 0) { throw 'Inno Setup 安装失败' }
           }
-          Compress-Archive -Path dist/CGit -DestinationPath "dist/CGit-$env:VERSION-windows-x64.zip"
+      - name: 制作 Windows 安装包
+        shell: pwsh
+        run: ./flutter_ui/tool/package_windows.ps1 -Version $env:VERSION
+      - name: 验证安装、重复安装与卸载
+        shell: pwsh
+        run: ./flutter_ui/tool/test_windows_installer.ps1 -Installer (Resolve-Path "dist/CGit-$env:VERSION-windows-x64-Setup.exe")
       - uses: actions/upload-artifact@v6
         with:
           name: windows
-          path: dist/*.zip
+          path: dist/*-Setup.exe
           if-no-files-found: error
 
   release:

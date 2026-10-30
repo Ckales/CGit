@@ -11,7 +11,7 @@ import 'theme.dart';
 
 /// 当前应用版本。发布工作流会校验这里与 pubspec.yaml、两个 Cargo.toml 一致，
 /// 所以升级版本时要一起改。
-const appVersion = '1.0.3';
+const appVersion = '1.1.1';
 
 const _releaseOwner = 'Ckales';
 const _releaseRepo = 'CGit';

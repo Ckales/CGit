@@ -136,4 +136,85 @@ void main() {
       const TextSelection(baseOffset: 0, extentOffset: 8),
     );
   });
+
+  group('tag prompt', () {
+    late ({String name, TagSubmit submit})? tagged;
+
+    Future<void> openTag(WidgetTester tester) async {
+      tagged = null;
+      await tester.pumpWidget(MaterialApp(
+        home: Theming(
+          palette: Palette.dark,
+          child: Material(
+            type: MaterialType.transparency,
+            child: Builder(
+              builder: (context) => TextButton(
+                onPressed: () async {
+                  tagged = await promptTagName(
+                    context,
+                    title: '在 HEAD 上打标签',
+                  );
+                },
+                child: const Text('open'),
+              ),
+            ),
+          ),
+        ),
+      ));
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('创建 tags locally', (tester) async {
+      await openTag(tester);
+
+      await tester.enterText(find.byType(TextField), 'v1.1.2');
+      await tester.tap(find.text('创建'));
+      await tester.pumpAndSettle();
+
+      expect(tagged?.name, 'v1.1.2');
+      expect(tagged?.submit, TagSubmit.create);
+    });
+
+    testWidgets('the chevron offers 创建并推送', (tester) async {
+      await openTag(tester);
+
+      await tester.enterText(find.byType(TextField), 'v1.1.2');
+      await tester.tap(find.byTooltip('更多创建方式'));
+      await tester.pumpAndSettle();
+      expect(find.text('创建并推送'), findsOneWidget);
+
+      // The popup is at least as wide as the split button and shares its
+      // right edge, so it sits under 创建 instead of hanging off it.
+      final menu = find
+          .ancestor(
+            of: find.text('创建并推送'),
+            matching: find.byType(Material),
+          )
+          .first;
+      final menuRect = tester.getRect(menu);
+      final createRect = tester.getRect(find.byTooltip('创建标签'));
+      final chevronRect = tester.getRect(find.byTooltip('更多创建方式'));
+      final buttonWidth = chevronRect.right - createRect.left;
+      expect(menuRect.width, greaterThanOrEqualTo(buttonWidth - 0.5));
+      expect(menuRect.left, lessThanOrEqualTo(createRect.left + 0.5));
+      expect(menuRect.right, moreOrLessEquals(chevronRect.right, epsilon: 0.5));
+
+      await tester.tap(find.text('创建并推送'));
+      await tester.pumpAndSettle();
+
+      expect(tagged?.name, 'v1.1.2');
+      expect(tagged?.submit, TagSubmit.createAndPush);
+    });
+
+    testWidgets('enter keeps the plain create', (tester) async {
+      await openTag(tester);
+
+      await tester.enterText(find.byType(TextField), 'v9');
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await tester.pumpAndSettle();
+
+      expect(tagged?.submit, TagSubmit.create);
+    });
+  });
 }

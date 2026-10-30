@@ -100,6 +100,7 @@ Future<void> showRepoMenu({
   required Offset position,
   required List<MenuAction> items,
   bool alignRight = false,
+  double minWidth = 140,
 }) async {
   final p = Theming.of(context);
   // Passed down by hand: the menu is a new route, and Theming isn't an
@@ -112,6 +113,7 @@ Future<void> showRepoMenu({
     anchor: overlay.globalToLocal(position),
     alignRight: alignRight,
     palette: p,
+    minWidth: minWidth,
     child: StatefulBuilder(builder: (context, setState) {
       // Only menus with a checked entry need the tick column.
       final hasChecks = remaining.any((item) => item.checked);
@@ -149,12 +151,17 @@ class _MenuRoute extends PopupRoute<MenuAction> {
     required this.anchor,
     required this.alignRight,
     required this.palette,
+    required this.minWidth,
     required this.child,
   });
 
   final Offset anchor;
   final bool alignRight;
   final Palette palette;
+
+  /// Menus opened from a small button pass a smaller value so the popup hugs
+  /// its labels instead of hanging off the control it belongs to.
+  final double minWidth;
   final Widget child;
 
   @override
@@ -188,7 +195,8 @@ class _MenuRoute extends PopupRoute<MenuAction> {
               borderRadius: BorderRadius.circular(6),
             ),
             child: ConstrainedBox(
-              constraints: const BoxConstraints(minWidth: 140, maxWidth: 420),
+              constraints:
+                  BoxConstraints(minWidth: minWidth, maxWidth: 420),
               child: IntrinsicWidth(
                 child: SingleChildScrollView(
                   padding: const EdgeInsets.all(4),

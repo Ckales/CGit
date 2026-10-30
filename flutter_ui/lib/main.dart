@@ -1079,17 +1079,20 @@ class _RepoScreenState extends State<RepoScreen> {
   }
 
   Future<void> _newTag({String? oid}) async {
-    final name = await promptText(
+    final picked = await promptTagName(
       context,
       title: oid == null ? '在 HEAD 上打标签' : '在 ${oid.substring(0, 7)} 上打标签',
-      hint: '标签名',
-      confirmLabel: '创建',
     );
-    if (name == null || name.trim().isEmpty) return;
-    await _stashAction(
-      '打标签 ${name.trim()}',
-      () => _git!.createTag(name.trim(), oid: oid),
-    );
+    if (picked == null || picked.name.trim().isEmpty) return;
+    final name = picked.name.trim();
+    if (picked.submit == TagSubmit.create) {
+      await _stashAction('打标签 $name', () => _git!.createTag(name, oid: oid));
+      return;
+    }
+    await _network('打标签并推送 $name', () async {
+      await _git!.createTag(name, oid: oid);
+      return _git!.pushTag(name);
+    });
   }
 
   /* ---------- branches ---------- */

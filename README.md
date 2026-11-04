@@ -21,13 +21,13 @@ CGit 是一款轻量的 Git 桌面客户端，提供变更、提交、历史、�
 - 管理分支、远端、标签和 stash；支持抓取、拉取、推送与克隆。
 - 处理 merge、rebase、cherry-pick、revert 和冲突；可打开包含多个仓库的工作区。
 - 启动时检查 GitHub 上的新版本，发现后可在应用内直接前往下载。
-- 可选用 AI 根据已暂存的 diff 生成提交说明。
+- 可选用 AI 根据当前勾选的改动生成提交说明（无需先暂存）。
 
 ## 实现方案
 
 界面使用 Flutter，Git 核心由 Rust 实现，两者通过 flutter_rust_bridge 连接。`gix` 负责可支持的本地读取；网络操作，以及索引、工作区、引用和历史的修改，交给系统 Git CLI，以沿用用户已有的 credential helper、SSH、hooks、签名和 Git LFS 配置。
 
-界面偏好和可选的 AI Token 保存在本机。仅在使用 AI 生成功能时，CGit 会把系统提示词和**已暂存的 diff** 发给用户配置的 OpenAI-compatible `/chat/completions` 服务。HTTPS 远端 Token 交由 Git 当前配置的 credential helper 保存，不进入应用偏好。
+界面偏好和可选的 AI Token 保存在本机。仅在使用 AI 生成功能时，CGit 会把系统提示词和**当前勾选内容的 diff**（包括所勾选的已暂存和未暂存改动）发给用户配置的 OpenAI-compatible `/chat/completions` 服务。HTTPS 远端 Token 交由 Git 当前配置的 credential helper 保存，不进入应用偏好。
 
 ## 发布与开发
 

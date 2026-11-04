@@ -250,8 +250,7 @@ class Git {
 
   /* ---------- commit messages ---------- */
 
-  /// The staged diff, which is what an AI message should describe — an empty
-  /// `file` means everything staged.
+  /// The staged diff (index vs HEAD). An empty `file` means everything staged.
   Future<String> stagedDiff({String file = ''}) =>
       _guard(() => rust.getStagedDiff(path: repo, file: file));
 

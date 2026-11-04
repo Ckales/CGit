@@ -79,6 +79,18 @@ class _FakeGit implements Git {
   }
 
   @override
+  Future<String> stageAll({List<String> files = const []}) async {
+    log.add('$repo:stage:${files.join(",")}');
+    return '';
+  }
+
+  @override
+  Future<String> unstageAll({List<String> files = const []}) async {
+    log.add('$repo:unstage:${files.join(",")}');
+    return '';
+  }
+
+  @override
   Future<String> stashStaged({String message = ''}) async {
     log.add('$repo:stash:$message');
     return '';
@@ -94,6 +106,217 @@ class _FakeGit implements Git {
 }
 
 void main() {
+  testWidgets('selection is local and keeps the displayed diff through refresh',
+      (tester) async {
+    final log = <String>[];
+    var refreshes = 0;
+    final picked = <FileStatus>[];
+    Widget sheet() => _host(CommitSheet(
+          groups: const [
+            (
+              repo: _demo,
+              changes: [
+                FileStatus(path: 'a.txt', status: 'M', staged: false),
+                FileStatus(path: 'b.txt', status: 'M', staged: true),
+              ]
+            )
+          ],
+          active: _demo,
+          gitFor: (path) => _FakeGit(path, log),
+          selected: (repo: _demo.path, path: 'a.txt', staged: false),
+          diffPane: const Text('visible diff'),
+          onClose: () {},
+          onChanged: () async {
+            refreshes++;
+          },
+          onPickFile: (_, file) => picked.add(file),
+          onCommitAndPush: (_) async {},
+          onCreatePatch: ({required bool toClipboard}) async {},
+        ));
+    await tester.pumpWidget(sheet());
+    await tester.tap(find.text('a.txt'));
+    await tester.tap(find.byTooltip('勾选提交'));
+    await tester.pump();
+    expect(log, isEmpty);
+    expect(refreshes, 0);
+    expect(picked.single.staged, isFalse);
+    expect(find.text('visible diff'), findsOneWidget);
+    await tester.pumpWidget(sheet());
+    await tester.tap(find.byTooltip('取消勾选').last);
+    await tester.pump();
+    expect(log, isEmpty);
+    await tester.enterText(_messageBox, 'selected only');
+    await tester.tap(find.text('提交').last);
+    await tester.pumpAndSettle();
+    expect(log, [
+      '/tmp:unstage:b.txt',
+      '/tmp:stage:a.txt',
+      '/tmp:commit:selected only',
+    ]);
+  });
+
+  testWidgets('group and all selection stay local, including hidden files',
+      (tester) async {
+    final log = <String>[];
+    await tester.pumpWidget(_host(CommitSheet(
+      groups: const [
+        (
+          repo: _demo,
+          changes: [
+            FileStatus(path: 'src/a.txt', status: 'M', staged: false),
+            FileStatus(path: 'src/b.txt', status: 'M', staged: false),
+          ]
+        )
+      ],
+      active: _demo,
+      gitFor: (path) => _FakeGit(path, log),
+      diffPane: const Text('same preview'),
+      onClose: () {},
+      onChanged: () async {
+        fail('selection must not refresh');
+      },
+      onPickFile: (_, __) {},
+      onCommitAndPush: (_) async {},
+      onCreatePatch: ({required bool toClipboard}) async {},
+    )));
+    await tester.tap(find.byTooltip('勾选此组').last);
+    await tester.pump();
+    expect(find.byTooltip('取消勾选'), findsNWidgets(2));
+    await tester.tap(find.byTooltip('取消勾选此组').first);
+    await tester.pump();
+    expect(find.byTooltip('勾选提交'), findsNWidgets(2));
+    await tester.enterText(
+      find.ancestor(of: find.text('过滤路径'), matching: find.byType(TextField)),
+      'a.txt',
+    );
+    await tester.pump();
+    await tester.tap(find.byTooltip('勾选全部'));
+    await tester.pump();
+    await tester.enterText(find.byType(TextField).first, '');
+    await tester.pump();
+    expect(find.byTooltip('取消勾选'), findsNWidgets(2));
+    await tester.tap(find.byTooltip('取消勾选全部'));
+    await tester.pump();
+    expect(find.byTooltip('勾选提交'), findsNWidgets(2));
+    expect(find.text('same preview'), findsOneWidget);
+    expect(log, isEmpty);
+  });
+
+  testWidgets('keeping only the staged side preserves partial staging',
+      (tester) async {
+    final log = <String>[];
+    await tester.pumpWidget(_host(CommitSheet(
+      groups: const [
+        (
+          repo: _demo,
+          changes: [
+            FileStatus(path: 'a.txt', status: 'M', staged: true),
+            FileStatus(path: 'a.txt', status: 'M', staged: false),
+          ]
+        )
+      ],
+      active: _demo,
+      gitFor: (path) => _FakeGit(path, log),
+      diffPane: const SizedBox(),
+      onClose: () {},
+      onChanged: () async {},
+      onPickFile: (_, __) {},
+      onCommitAndPush: (_) async {},
+      onCreatePatch: ({required bool toClipboard}) async {},
+    )));
+    await tester.enterText(_messageBox, 'partial');
+    await tester.tap(find.text('提交').last);
+    await tester.pumpAndSettle();
+    expect(log, ['/tmp:commit:partial']);
+  });
+
+  testWidgets('selecting the working-tree side selects the complete file',
+      (tester) async {
+    final log = <String>[];
+    await tester.pumpWidget(_host(CommitSheet(
+      groups: const [
+        (
+          repo: _demo,
+          changes: [
+            FileStatus(path: 'a.txt', status: 'M', staged: true),
+            FileStatus(path: 'a.txt', status: 'M', staged: false),
+          ]
+        )
+      ],
+      active: _demo,
+      gitFor: (path) => _FakeGit(path, log),
+      diffPane: const SizedBox(),
+      onClose: () {},
+      onChanged: () async {},
+      onPickFile: (_, __) {},
+      onCommitAndPush: (_) async {},
+      onCreatePatch: ({required bool toClipboard}) async {},
+    )));
+    await tester.tap(find.byTooltip('取消勾选'));
+    await tester.pump();
+    expect(find.byTooltip('勾选提交'), findsNWidgets(2));
+    await tester.tap(find.byTooltip('勾选提交').last);
+    await tester.pump();
+    expect(find.byTooltip('取消勾选'), findsNWidgets(2));
+    expect(log, isEmpty);
+    await tester.enterText(_messageBox, 'whole file');
+    await tester.tap(find.text('提交').last);
+    await tester.pumpAndSettle();
+    expect(log, ['/tmp:stage:a.txt', '/tmp:commit:whole file']);
+  });
+
+  testWidgets('a failed commit keeps the selection after index refresh',
+      (tester) async {
+    final log = <String>[];
+    var failed = false;
+    var closed = false;
+    var changes = const [
+      FileStatus(path: 'a.txt', status: 'M', staged: false),
+      FileStatus(path: 'b.txt', status: 'M', staged: true),
+    ];
+    await tester.pumpWidget(_host(StatefulBuilder(
+      builder: (context, setState) => CommitSheet(
+        groups: [(repo: _demo, changes: changes)],
+        active: _demo,
+        gitFor: (path) =>
+            _FakeGit(path, log, commitError: failed ? null : 'hook refused'),
+        diffPane: const SizedBox(),
+        onClose: () => closed = true,
+        onChanged: () async {
+          setState(() {
+            failed = true;
+            changes = const [
+              FileStatus(path: 'a.txt', status: 'M', staged: true),
+              FileStatus(path: 'b.txt', status: 'M', staged: false),
+            ];
+          });
+        },
+        onPickFile: (_, __) {},
+        onCommitAndPush: (_) async {},
+        onCreatePatch: ({required bool toClipboard}) async {},
+      ),
+    )));
+    await tester.tap(find.byTooltip('勾选提交'));
+    await tester.pump();
+    await tester.tap(find.byTooltip('取消勾选').last);
+    await tester.pump();
+    await tester.enterText(_messageBox, 'retry');
+    await tester.tap(find.text('提交').last);
+    await tester.pumpAndSettle();
+    expect(closed, isFalse);
+    expect(find.byTooltip('取消勾选'), findsOneWidget);
+    expect(find.byTooltip('勾选提交'), findsOneWidget);
+    await tester.tap(find.text('提交').last);
+    await tester.pumpAndSettle();
+    expect(closed, isTrue);
+    expect(log, [
+      '/tmp:unstage:b.txt',
+      '/tmp:stage:a.txt',
+      '/tmp:commit:retry',
+      '/tmp:commit:retry',
+    ]);
+  });
+
   group('commit options', () {
     testWidgets('amending is allowed with nothing staged — it rewords HEAD',
         (tester) async {
@@ -104,14 +327,14 @@ void main() {
       await tester.enterText(_messageBox, '改个说明');
       await tester.tap(find.text('提交').last);
       await tester.pump();
-      expect(find.text('没有已暂存的改动'), findsOneWidget);
+      expect(find.text('没有勾选的改动'), findsOneWidget);
 
       // With amend on, the same state is fine: there is a commit to reword.
       await tester.tap(find.text('修正提交'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('修正提交').last);
       await tester.pump();
-      expect(find.text('没有已暂存的改动'), findsNothing);
+      expect(find.text('没有勾选的改动'), findsNothing);
     });
 
     testWidgets('the commit button says what it will do', (tester) async {
@@ -263,7 +486,7 @@ void main() {
     await tester.tap(find.text('提交').last);
     await tester.pump();
 
-    expect(find.text('没有已暂存的改动'), findsOneWidget);
+    expect(find.text('没有勾选的改动'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

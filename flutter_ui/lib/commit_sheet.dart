@@ -306,12 +306,6 @@ class _CommitSheetState extends State<CommitSheet> {
     }
   }
 
-  /// Real index state used by the explicit stash action, before filtering.
-  List<FileStatus> get _allChanges => [
-        for (final g in widget.groups) ...g.changes,
-      ];
-  List<FileStatus> get _staged => _allChanges.where((f) => f.staged).toList();
-
   /// Selection never writes the index or refreshes the diff pane.
   void _selectEverything(bool checked) {
     for (final g in widget.groups) {
@@ -340,11 +334,13 @@ class _CommitSheetState extends State<CommitSheet> {
     if (add.isNotEmpty) await git.stageAll(files: add);
   }
 
-  /// 储藏真实已暂存的文件，不应用当前提交选择。
-  Future<void> _stashStaged(String message) async {
+  /// 储藏当前勾选的文件。勾选只是页面选择，先写成索引再 `stash --staged`，
+  /// 未勾选的保持原样。
+  Future<void> _stashSelected(String message) async {
     for (final g in widget.groups) {
-      if (!g.changes.any((f) => f.staged)) continue;
+      if (!g.changes.any((f) => _checked(g.repo, f))) continue;
       try {
+        await _applySelection(g.repo);
         await widget.gitFor(g.repo.path).stashStaged(message: message);
       } on GitError catch (e) {
         if (widget.groups.length == 1) rethrow;
@@ -353,15 +349,15 @@ class _CommitSheetState extends State<CommitSheet> {
     }
   }
 
-  Future<void> _promptAndStashStaged() async {
+  Future<void> _promptAndStashSelected() async {
     final message = await promptText(
       context,
-      title: '储藏已暂存的文件',
+      title: '储藏勾选的文件',
       hint: '储藏说明（留空由 Git 自动生成）',
       confirmLabel: '储藏',
     );
     if (message == null || !mounted) return;
-    await _run(() => _stashStaged(message.trim()));
+    await _run(() => _stashSelected(message.trim()));
   }
 
   Future<void> _run(Future<void> Function() action) async {
@@ -654,9 +650,9 @@ class _CommitSheetState extends State<CommitSheet> {
             ),
             const SizedBox(width: 6),
             _Btn(
-              tooltip: _staged.isEmpty ? '请先暂存要储藏的文件' : '储藏已暂存的文件并填写储藏说明',
+              tooltip: _hasSelected ? '储藏勾选的文件并填写储藏说明' : '请先勾选要储藏的文件',
               icon: true,
-              onTap: _busy || _staged.isEmpty ? null : _promptAndStashStaged,
+              onTap: _busy || !_hasSelected ? null : _promptAndStashSelected,
               child: _label(p, '储藏', size: 11),
             ),
             const SizedBox(width: 6),

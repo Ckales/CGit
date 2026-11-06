@@ -4,9 +4,38 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'git_text.dart';
+import 'diff_syntax.dart';
 import 'theme.dart';
 
 enum DiffMode { split, unified }
+
+/// Read-only preview for a complete patch, including untracked-file diffs.
+class PatchPreview extends StatelessWidget {
+  const PatchPreview(
+      {super.key, required this.text, required this.file, required this.mode});
+  final String text;
+  final String file;
+  final DiffMode mode;
+
+  @override
+  Widget build(BuildContext context) {
+    final patch = splitPatchText(text);
+    if (patch.hunks.isNotEmpty) {
+      return DiffPane(file: file, hunks: patch.hunks, mode: mode);
+    }
+    final p = Theming.of(context);
+    return Container(
+      color: p.diffBg,
+      child: SelectionArea(
+          child: SingleChildScrollView(
+        padding: const EdgeInsets.all(8),
+        child: SizedBox(
+            width: double.infinity,
+            child: Text(text, style: mono.copyWith(color: p.text))),
+      )),
+    );
+  }
+}
 
 /// One file's patch: a stack of hunks, each independently selectable.
 ///
@@ -18,6 +47,7 @@ class DiffPane extends StatelessWidget {
     super.key,
     required this.hunks,
     required this.mode,
+    this.file = '',
     this.onApply,
     this.staged = false,
     this.blockKeys = const {},
@@ -25,6 +55,7 @@ class DiffPane extends StatelessWidget {
 
   final List<String> hunks;
   final DiffMode mode;
+  final String file;
 
   /// Keys for the rows that start a run of changed lines, so ↑/↓ can scroll to
   /// one. Keyed "hunkIndex:rowIndex"; the owner computes the same ids from
@@ -66,6 +97,7 @@ class DiffPane extends StatelessWidget {
                 _HunkView(
                   key: ValueKey(hunk),
                   hunk: hunk,
+                  file: file,
                   index: i,
                   mode: mode,
                   onApply: onApply,
@@ -84,6 +116,7 @@ class _HunkView extends StatefulWidget {
   const _HunkView({
     super.key,
     required this.hunk,
+    required this.file,
     required this.index,
     required this.mode,
     required this.onApply,
@@ -92,6 +125,7 @@ class _HunkView extends StatefulWidget {
   });
 
   final String hunk;
+  final String file;
   final int index;
   final DiffMode mode;
   final Map<String, GlobalKey> blockKeys;
@@ -105,6 +139,9 @@ class _HunkView extends StatefulWidget {
 class _HunkViewState extends State<_HunkView> {
   /// The key for a row, when that row starts a run of changed lines.
   GlobalKey? _blockKey(int row) => widget.blockKeys['${widget.index}:$row'];
+
+  (String, String, Palette)? _syntaxKey;
+  late DiffSyntax _syntax;
 
   final _picked = <int>{};
   int? _anchor;
@@ -160,6 +197,11 @@ class _HunkViewState extends State<_HunkView> {
   @override
   Widget build(BuildContext context) {
     final palette = Theming.of(context);
+    final syntaxKey = (widget.hunk, widget.file, palette);
+    if (_syntaxKey != syntaxKey) {
+      _syntax = DiffSyntax(widget.hunk, widget.file, palette);
+      _syntaxKey = syntaxKey;
+    }
     final interactive = widget.onApply != null;
     final headerText = widget.hunk.split('\n').first;
 
@@ -188,6 +230,9 @@ class _HunkViewState extends State<_HunkView> {
         .skip(1)
         .toList();
     final rows = <Widget>[];
+    final head = parseHunkHeader(widget.hunk.split('\n').first);
+    var oldNo = head?.oldStart ?? 0;
+    var newNo = head?.newStart ?? 0;
 
     for (var i = 0; i < lines.length; i++) {
       final line = lines[i];
@@ -197,6 +242,14 @@ class _HunkViewState extends State<_HunkView> {
           : line.startsWith('-')
               ? palette.red
               : palette.text;
+      TextSpan? code;
+      if (!line.startsWith('\\')) {
+        code = line.startsWith('-')
+            ? _syntax.oldLines[oldNo]
+            : _syntax.newLines[newNo];
+        if (!line.startsWith('+')) oldNo++;
+        if (!line.startsWith('-')) newNo++;
+      }
       rows.add(_row(
         row: i,
         picks: changed ? [i] : const [],
@@ -210,7 +263,16 @@ class _HunkViewState extends State<_HunkView> {
                   ? palette.delRow
                   : null,
           padding: const EdgeInsets.symmetric(horizontal: 8),
-          child: Text(line, style: mono.copyWith(color: color)),
+          child: code == null
+              ? Text(line, style: mono.copyWith(color: color))
+              : Text.rich(
+                  TextSpan(children: [
+                    TextSpan(
+                        text: line.isEmpty ? '' : line[0],
+                        style: TextStyle(color: color)),
+                    code,
+                  ]),
+                  style: mono.copyWith(color: palette.text)),
         ),
       ));
     }
@@ -225,6 +287,8 @@ class _HunkViewState extends State<_HunkView> {
     if (paired == null) return _unifiedRows(palette, interactive);
 
     final rows = <Widget>[];
+    final addedFile = paired.head.oldStart == 0 &&
+        paired.rows.every((row) => row.left == null);
     for (final (i, row) in paired.rows.indexed) {
       IntraDiff? intra;
       if (row.type == RowType.mod) {
@@ -239,21 +303,25 @@ class _HunkViewState extends State<_HunkView> {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              _NumCell(cell: row.left),
-              Expanded(
-                child: _TextCell(
-                  cell: row.left,
-                  part: intra?.left,
-                  intraColor: palette.intraDel,
-                  tint: row.type == RowType.del || row.type == RowType.mod
-                      ? palette.delRow
-                      : null,
+              if (!addedFile) ...[
+                _NumCell(cell: row.left),
+                Expanded(
+                  child: _TextCell(
+                    cell: row.left,
+                    syntax: _syntax.oldLines[row.left?.no],
+                    part: intra?.left,
+                    intraColor: palette.intraDel,
+                    tint: row.type == RowType.del || row.type == RowType.mod
+                        ? palette.delRow
+                        : null,
+                  ),
                 ),
-              ),
+              ],
               _NumCell(cell: row.right),
               Expanded(
                 child: _TextCell(
                   cell: row.right,
+                  syntax: _syntax.newLines[row.right?.no],
                   part: intra?.right,
                   intraColor: palette.intraAdd,
                   tint: row.type == RowType.add || row.type == RowType.mod
@@ -414,12 +482,14 @@ class _NumCell extends StatelessWidget {
 class _TextCell extends StatelessWidget {
   const _TextCell({
     required this.cell,
+    required this.syntax,
     required this.part,
     required this.intraColor,
     required this.tint,
   });
 
   final DiffCell? cell;
+  final TextSpan? syntax;
   final LinePart? part;
   final Color intraColor;
   final Color? tint;
@@ -438,20 +508,9 @@ class _TextCell extends StatelessWidget {
     }
 
     final style = mono.copyWith(color: palette.text);
-    final Widget text = part == null
+    final Widget text = syntax == null
         ? Text(cell!.text, style: style)
-        : Text.rich(
-            TextSpan(children: [
-              TextSpan(text: part!.prefix),
-              if (part!.mid.isNotEmpty)
-                TextSpan(
-                  text: part!.mid,
-                  style: TextStyle(backgroundColor: intraColor),
-                ),
-              TextSpan(text: part!.suffix),
-            ]),
-            style: style,
-          );
+        : Text.rich(markIntra(syntax!, part, intraColor), style: style);
 
     return Container(
       width: double.infinity,

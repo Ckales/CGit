@@ -579,14 +579,14 @@ void main() {
       expect(closed, isTrue);
     });
 
-    testWidgets('储藏 asks for its own message before stashing staged files',
+    testWidgets('储藏 asks for its own message before stashing ticked files',
         (tester) async {
       await pump(tester);
       await tester.enterText(_messageBox, '提交说明不能代替储藏说明');
       await tester.tap(find.text('储藏'));
       await tester.pumpAndSettle();
 
-      expect(find.text('储藏已暂存的文件'), findsOneWidget);
+      expect(find.text('储藏勾选的文件'), findsOneWidget);
       expect(log, isEmpty);
       await tester.enterText(
           find.descendant(
@@ -595,19 +595,65 @@ void main() {
       await tester.tap(find.text('储藏').last);
       await tester.pumpAndSettle();
 
+      // Default ticks follow the index, so already-staged files are stashed
+      // and the unticked repo is left alone. The sheet stays up for the rest.
       expect(log, ['/w/admin:stash:wip: x', '/w/front:stash:wip: x']);
-      // Unticked files are still there to commit, so the sheet stays up.
       expect(closed, isFalse);
     });
 
-    testWidgets('储藏 is disabled until a file is staged', (tester) async {
+    testWidgets('储藏 writes the page selection into the index first',
+        (tester) async {
+      log = [];
+      final gits = {
+        front.path: _FakeGit(front.path, log),
+      };
+      await tester.pumpWidget(_host(CommitSheet(
+        groups: const [
+          (repo: front, changes: [staged, unstaged]),
+        ],
+        active: front,
+        gitFor: (path) => gits[path]!,
+        diffPane: const SizedBox(),
+        onClose: () {},
+        onChanged: () async {},
+        onPickFile: (_, __) {},
+        onCommitAndPush: (_) async {},
+        onCreatePatch: ({required bool toClipboard}) async {},
+      )));
+      // Untick the staged file first. Ticking the working-tree row also ticks
+      // its staged side, so the other order would put both files back.
+      await tester.tap(find.byTooltip('取消勾选'));
+      await tester.pump();
+      await tester.tap(find.byTooltip('勾选提交').last);
+      await tester.pump();
+      await tester.tap(find.text('储藏'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+          find.descendant(
+              of: find.byType(Dialog), matching: find.byType(TextField)),
+          'wip: selected');
+      await tester.tap(find.text('储藏').last);
+      await tester.pumpAndSettle();
+
+      expect(log, [
+        '/w/front:unstage:a.py',
+        '/w/front:stage:b.py',
+        '/w/front:stash:wip: selected',
+      ]);
+    });
+
+    testWidgets('储藏 is disabled until a file is ticked', (tester) async {
       await tester.pumpWidget(_host(_sheet(changes: const [
         FileStatus(path: 'a.dart', status: 'M', staged: false),
       ])));
 
       final dimmed = tester.widget<Opacity>(find.descendant(
-          of: find.byTooltip('请先暂存要储藏的文件'), matching: find.byType(Opacity)));
+          of: find.byTooltip('请先勾选要储藏的文件'), matching: find.byType(Opacity)));
       expect(dimmed.opacity, 0.45);
+
+      await tester.tap(find.byTooltip('勾选提交'));
+      await tester.pump();
+      expect(find.byTooltip('储藏勾选的文件并填写储藏说明'), findsOneWidget);
     });
 
     testWidgets('cancelling the stash message leaves every repo untouched',

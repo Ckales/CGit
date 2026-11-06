@@ -8,6 +8,7 @@ import 'package:cgit_flutter/prefs.dart';
 import 'package:cgit_flutter/src/rust/frb_generated.dart'
     show RustLib, RustLibApi;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -23,6 +24,7 @@ String _patch(String file) => '@@ -1,160 +1,160 @@\n${[
 class _GitApi extends RustLibApi {
   final watch = StreamController<String>.broadcast();
   bool working = false;
+  bool multi = false;
   bool changed = false;
 
   String patch(String file) => changed
@@ -31,8 +33,9 @@ class _GitApi extends RustLibApi {
 
   @override
   Future<Workspace> crateApiWatchOpenWorkspace({required String path}) async =>
-      const Workspace(root: '/demo', repos: [
-        RepoRef(path: '/demo', name: 'demo', branch: 'main'),
+      Workspace(root: '/demo', repos: [
+        const RepoRef(path: '/demo', name: 'demo', branch: 'main'),
+        if (multi) const RepoRef(path: '/other', name: 'other', branch: 'main'),
       ]);
 
   @override
@@ -138,14 +141,19 @@ void main() {
   tearDownAll(api.watch.close);
 
   Future<ScrollableState> openDiff(WidgetTester tester,
-      {DiffMode mode = DiffMode.split, bool working = false}) async {
+      {DiffMode mode = DiffMode.split,
+      bool working = false,
+      bool docked = false}) async {
     api.working = working;
+    api.multi = docked;
     api.changed = false;
     SharedPreferences.setMockInitialValues({'cgit.diffView': mode.name});
     final prefs = await Prefs.load();
     await tester.pumpWidget(CGitApp(startPath: '/demo', prefs: prefs));
     await tester.pumpAndSettle();
-    await tester.tap(find.text(working ? '提交' : 'navigation fixture'));
+    await tester.tap(docked
+        ? find.byTooltip('/demo\n右键切换分支')
+        : find.text(working ? '提交' : 'navigation fixture'));
     await tester.pumpAndSettle();
     if (working) await tester.tap(find.text('a.dart'));
     await tester.pumpAndSettle();
@@ -153,6 +161,66 @@ void main() {
         .descendant(
             of: find.byType(DiffPane), matching: find.byType(Scrollable))
         .first);
+  }
+
+  for (final presentation in ['history', 'sheet', 'docked']) {
+    final working = presentation != 'history';
+    for (final mode in DiffMode.values) {
+      testWidgets(
+          'expand and restore preserves diff state ($presentation, $mode)',
+          (tester) async {
+        tester.view.physicalSize = const Size(1200, 900);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        final scroll = await openDiff(tester,
+            working: working, mode: mode, docked: presentation == 'docked');
+        final original = tester.getSize(find.byType(DiffPane));
+        if (working) {
+          final field = find.ancestor(
+              of: find.text('提交说明'), matching: find.byType(TextField));
+          await tester.enterText(field, 'keep draft');
+          await tester.tap(mode == DiffMode.split
+              ? find.text('3').first
+              : find.text('-a.dart old 2'));
+          await tester.pump();
+        }
+        scroll.position.jumpTo(100);
+        await tester.pump();
+        await tester.tap(find.byTooltip('放大对比'));
+        await tester.pumpAndSettle();
+        expect(find.byType(DiffPane), findsOneWidget);
+        final enlarged = tester.getSize(find.byType(DiffPane));
+        expect(enlarged.width, greaterThan(original.width));
+        expect(enlarged.height, greaterThan(original.height));
+        expect(scroll.mounted, isTrue);
+        expect(scroll.position.pixels, 100);
+        expect(tester.takeException(), isNull);
+        await tester.tap(find.byTooltip('还原对比'));
+        await tester.pumpAndSettle();
+        expect(tester.getSize(find.byType(DiffPane)), original);
+        expect(scroll.mounted, isTrue);
+        expect(scroll.position.pixels, 100);
+        if (working) {
+          expect(find.text('keep draft'), findsOneWidget);
+          final pickedButton = find.ancestor(
+              of: find.text('暂存选中行'), matching: find.byType(GestureDetector));
+          expect(tester.widget<GestureDetector>(pickedButton.first).onTap,
+              isNotNull);
+        }
+        await tester.tap(find.byTooltip('放大对比'));
+        await tester.pumpAndSettle();
+        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+        await tester.pumpAndSettle();
+        expect(find.byTooltip('放大对比'), findsOneWidget);
+        await tester.tap(find.byTooltip('放大对比'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byTooltip('关闭差异区'));
+        await tester.pumpAndSettle();
+        expect(find.byTooltip('还原对比'), findsNothing);
+        expect(tester.takeException(), isNull);
+      });
+    }
   }
 
   void expectBlockVisible(WidgetTester tester, {required bool last}) {

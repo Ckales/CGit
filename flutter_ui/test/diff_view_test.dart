@@ -13,6 +13,56 @@ Widget _host(Widget child) => MaterialApp(
     );
 
 void main() {
+  testWidgets('Go syntax is coloured in split and unified views',
+      (tester) async {
+    for (final mode in DiffMode.values) {
+      await tester.pumpWidget(_host(DiffPane(
+        file: 'main.go',
+        hunks: const [
+          '@@ -1 +1 @@\n-var old = "before"\n+var next = "after"\n'
+        ],
+        mode: mode,
+      )));
+      final spans = tester
+          .widgetList<Text>(find.byType(Text))
+          .map((text) => text.textSpan)
+          .whereType<TextSpan>();
+      final colours = <Color>{};
+      void collect(InlineSpan span) {
+        if (span is TextSpan) {
+          if (span.style?.color case final color?) colours.add(color);
+          for (final child in span.children ?? <InlineSpan>[]) {
+            collect(child);
+          }
+        }
+      }
+
+      for (final span in spans) {
+        collect(span);
+      }
+      expect(colours.length, greaterThanOrEqualTo(3), reason: '$mode');
+      expect(find.textContaining('after', findRichText: true), findsOneWidget);
+    }
+  });
+
+  testWidgets('new-file patch shows highlighted code instead of raw headers',
+      (tester) async {
+    await tester.pumpWidget(_host(const PatchPreview(
+      file: 'main.go',
+      mode: DiffMode.split,
+      text: 'diff --git a/main.go b/main.go\nnew file mode 100644\n'
+          '--- /dev/null\n+++ b/main.go\n@@ -0,0 +1,2 @@\n'
+          '+package main\n+var name = "hello"\n',
+    )));
+    expect(find.textContaining('diff --git'), findsNothing);
+    expect(find.text('1'), findsOneWidget);
+    expect(find.textContaining('package main', findRichText: true),
+        findsOneWidget);
+    final code =
+        tester.getRect(find.textContaining('package main', findRichText: true));
+    expect(code.width, greaterThan(600));
+  });
+
   testWidgets('split view numbers both sides and keeps the hunk header',
       (tester) async {
     await tester.pumpWidget(_host(

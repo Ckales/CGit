@@ -128,15 +128,7 @@ class _PushDialogBodyState extends State<PushDialogBody> {
                     }
                     final text = snap.data;
                     if (text == null) return _note(p, '载入差异中…');
-                    final patch = splitPatchText(text);
-                    if (patch.hunks.isEmpty) {
-                      return SingleChildScrollView(
-                        padding: const EdgeInsets.all(8),
-                        child: SelectableText(text,
-                            style: mono.copyWith(color: p.text)),
-                      );
-                    }
-                    return DiffPane(hunks: patch.hunks, mode: mode);
+                    return PatchPreview(text: text, file: path, mode: mode);
                   },
                 ),
               ),

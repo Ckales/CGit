@@ -229,6 +229,10 @@ class _RepoScreenState extends State<RepoScreen> {
   /// folder the user closed once is usually one they don't care about.
   final _collapsedCommitDirs = <String>{};
   DiffTarget _target = const NoDiff();
+  bool _diffExpanded = false;
+  final _diffPaneKey = GlobalKey();
+
+  bool get _showExpandedDiff => _diffExpanded && _target is! NoDiff;
 
   /// One entry per run of changed lines in the open diff, "hunkIndex:rowIndex",
   /// in the order they appear. This is what ↑/↓ step through — by block, not by
@@ -550,6 +554,7 @@ class _RepoScreenState extends State<RepoScreen> {
       _searchText.clear();
       _searchAuthor.clear();
       _searchRange = null;
+      _diffExpanded = false;
       _target = const NoDiff();
       _paneBack = null;
     });
@@ -1118,6 +1123,7 @@ class _RepoScreenState extends State<RepoScreen> {
           _searchResults = null;
           _selectedCommit = null;
           _commitFiles = const [];
+          _diffExpanded = false;
           _target = const NoDiff();
           _paneBack = null;
         });
@@ -1279,6 +1285,7 @@ class _RepoScreenState extends State<RepoScreen> {
   void _closeCommit() => setState(() {
         _commitOpen = false;
         _commitDocked = false;
+        _diffExpanded = false;
         _target = const NoDiff();
         _paneBack = null;
       });
@@ -1891,6 +1898,8 @@ class _RepoScreenState extends State<RepoScreen> {
             setState(() => _rebasePlan = null);
           } else if (_mergeFile != null) {
             setState(() => _mergeFile = null);
+          } else if (_showExpandedDiff) {
+            setState(() => _diffExpanded = false);
           } else if (_commitOpen) {
             _closeCommit();
           }
@@ -1933,6 +1942,14 @@ class _RepoScreenState extends State<RepoScreen> {
                     _statusBar(p),
                   ],
                 ),
+                if (_commitOpen) _commitSheet(p),
+                if (_showExpandedDiff)
+                  Positioned.fill(
+                    child: ColoredBox(
+                      color: p.diffBg,
+                      child: _diffPane(p, expanded: true),
+                    ),
+                  ),
                 if (_cloneOpen)
                   CloneSheet(
                     onClose: () => setState(() => _cloneOpen = false),
@@ -1968,7 +1985,6 @@ class _RepoScreenState extends State<RepoScreen> {
                     onResolveSide: _resolveSide,
                     onToggleBase: _toggleBase,
                   ),
-                if (_commitOpen) _commitSheet(p),
               ],
             ),
           ),
@@ -2520,7 +2536,10 @@ class _RepoScreenState extends State<RepoScreen> {
     return rows;
   }
 
-  Widget _diffPane(Palette p) {
+  Widget _diffPane(Palette p, {bool expanded = false}) {
+    // Move the same subtree so picked rows and scroll position survive.
+    // The original host stays mounted, including the commit message editor.
+    if (_showExpandedDiff != expanded) return const SizedBox.expand();
     final title = switch (_target) {
       NoDiff() => '差异',
       WorkingFileDiff(:final repo, :final path, :final staged) =>
@@ -2534,102 +2553,128 @@ class _RepoScreenState extends State<RepoScreen> {
       _ => false,
     };
     final interactive = _target is WorkingFileDiff;
+    final file = switch (_target) {
+      WorkingFileDiff(:final path) => path,
+      CommitFileDiff(:final path) => path,
+      _ => '',
+    };
 
-    return Column(
-      children: [
-        _PaneHead(
-          title: title,
-          palette: p,
-          onBack: _paneBack == null
-              ? null
-              : () async {
-                  setState(() {
-                    _target = _paneBack!;
-                    _paneBack = null;
-                  });
-                  await _reloadDiff();
-                },
-          actions: _target is NoDiff
-              ? const []
-              : [
-                  (
-                    label: '\u2191',
-                    tooltip: '上一处改动（到头则跳上一个文件）',
-                    onTap: () => _navigateChange(-1),
+    return KeyedSubtree(
+      key: _diffPaneKey,
+      child: Column(
+        children: [
+          _PaneHead(
+            title: title,
+            trailing: _target is NoDiff
+                ? null
+                : IconButton(
+                    tooltip: expanded ? '还原对比' : '放大对比',
+                    icon: Icon(
+                        expanded ? Icons.close_fullscreen : Icons.open_in_full,
+                        size: 14),
+                    color: p.textDim,
+                    padding: EdgeInsets.zero,
+                    constraints:
+                        const BoxConstraints.tightFor(width: 26, height: 22),
+                    onPressed: () => setState(() => _diffExpanded = !expanded),
                   ),
-                  (
-                    label: '\u2193',
-                    tooltip: '下一处改动（到底则跳下一个文件）',
-                    onTap: () => _navigateChange(1),
-                  ),
-                  (
-                    label: _mode == DiffMode.split ? '并排' : '统一',
-                    tooltip: '切换并排 / 统一视图',
-                    onTap: () => setState(() {
-                          _mode = _mode == DiffMode.split
-                              ? DiffMode.unified
-                              : DiffMode.split;
-                          // Split and unified pair lines differently, so the block
-                          // positions move with the view.
-                          _recomputeBlocks();
-                        }),
-                  ),
-                  (
-                    label: '✕',
-                    tooltip: '关闭差异区',
-                    onTap: () => setState(() {
-                          _target = const NoDiff();
-                          _paneBack = null;
-                          _selectedCommit = null;
-                          _commitFiles = const [];
-                        }),
-                  ),
-                ],
-        ),
-        Expanded(
-          child: Row(
-            // Stretch, or a short diff shrinks to its content and floats in the
-            // middle of the pane instead of starting at the top.
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              if (_selectedCommit != null && _target is CommitFileDiff)
-                SizedBox(
-                  width: 200,
-                  child: Container(
-                    decoration: BoxDecoration(
-                      border: Border(right: BorderSide(color: p.border)),
+            palette: p,
+            onBack: _paneBack == null
+                ? null
+                : () async {
+                    setState(() {
+                      _target = _paneBack!;
+                      _paneBack = null;
+                    });
+                    await _reloadDiff();
+                  },
+            actions: _target is NoDiff
+                ? const []
+                : [
+                    (
+                      label: '\u2191',
+                      tooltip: '上一处改动（到头则跳上一个文件）',
+                      onTap: () => _navigateChange(-1),
                     ),
-                    child: ListView(children: _commitFileRows(p)),
-                  ),
-                ),
-              Expanded(
-                child: switch (_target) {
-                  BlameTarget() => BlameView(
-                      lines: _blame,
-                      // A sha jumps to that commit's diff for this file — the
-                      // usual next question after "who wrote this line".
-                      onOpenCommit: (oid) async {
-                        final path = (_target as BlameTarget).path;
-                        setState(() => _target = CommitFileDiff(oid, path));
-                        await _reloadDiff();
-                      },
+                    (
+                      label: '\u2193',
+                      tooltip: '下一处改动（到底则跳下一个文件）',
+                      onTap: () => _navigateChange(1),
                     ),
-                  _ => _hunks.isEmpty && _plainDiff.trim().isNotEmpty
-                      ? _PlainDiff(text: _plainDiff, palette: p)
-                      : DiffPane(
-                          key: ValueKey(_target),
-                          blockKeys: _blockKeys,
-                          hunks: _hunks,
-                          mode: _mode,
-                          staged: staged,
-                          onApply: interactive ? _applyPartial : null,
-                        ),
-                },
-              ),
-            ],
+                    (
+                      label: _mode == DiffMode.split ? '并排' : '统一',
+                      tooltip: '切换并排 / 统一视图',
+                      onTap: () => setState(() {
+                            _mode = _mode == DiffMode.split
+                                ? DiffMode.unified
+                                : DiffMode.split;
+                            // Split and unified pair lines differently, so the block
+                            // positions move with the view.
+                            _recomputeBlocks();
+                          }),
+                    ),
+                    (
+                      label: '✕',
+                      tooltip: '关闭差异区',
+                      onTap: () => setState(() {
+                            _diffExpanded = false;
+                            _target = const NoDiff();
+                            _paneBack = null;
+                            _selectedCommit = null;
+                            _commitFiles = const [];
+                          }),
+                    ),
+                  ],
           ),
-        ),
-      ],
+          Expanded(
+            child: Row(
+              // Stretch, or a short diff shrinks to its content and floats in the
+              // middle of the pane instead of starting at the top.
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (_selectedCommit != null && _target is CommitFileDiff)
+                  SizedBox(
+                    width: 200,
+                    child: Container(
+                      decoration: BoxDecoration(
+                        border: Border(right: BorderSide(color: p.border)),
+                      ),
+                      child: ListView(children: _commitFileRows(p)),
+                    ),
+                  ),
+                Expanded(
+                  child: switch (_target) {
+                    BlameTarget() => BlameView(
+                        lines: _blame,
+                        // A sha jumps to that commit's diff for this file — the
+                        // usual next question after "who wrote this line".
+                        onOpenCommit: (oid) async {
+                          final path = (_target as BlameTarget).path;
+                          setState(() => _target = CommitFileDiff(oid, path));
+                          await _reloadDiff();
+                        },
+                      ),
+                    _ => _hunks.isEmpty && _plainDiff.trim().isNotEmpty
+                        ? PatchPreview(
+                            text: _plainDiff,
+                            mode: _mode,
+                            file: file)
+                        : DiffPane(
+                            key: ValueKey(_target),
+                            blockKeys: _blockKeys,
+                            file: file,
+                            hunks: _hunks,
+                            mode: _mode,
+                            staged: staged,
+                            onApply: interactive ? _applyPartial : null,
+                          ),
+                  },
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -3214,28 +3259,6 @@ class _OpenProjectButtonState extends State<_OpenProjectButton> {
   }
 }
 
-/// A file with no hunks: shown verbatim, with no per-line staging because
-/// there is nothing for `git apply` to act on.
-class _PlainDiff extends StatelessWidget {
-  const _PlainDiff({required this.text, required this.palette});
-  final String text;
-  final Palette palette;
-
-  @override
-  Widget build(BuildContext context) => Container(
-        color: palette.diffBg,
-        child: SelectionArea(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.all(8),
-            child: SizedBox(
-              width: double.infinity,
-              child: Text(text, style: mono.copyWith(color: palette.text)),
-            ),
-          ),
-        ),
-      );
-}
-
 class _SectionAction {
   const _SectionAction(this.glyph, this.tooltip, this.onTap);
   final String glyph;
@@ -3290,8 +3313,10 @@ class _PaneHead extends StatelessWidget {
     required this.palette,
     this.onBack,
     this.actions = const [],
+    this.trailing,
   });
 
+  final Widget? trailing;
   final String title;
   final Palette palette;
 
@@ -3334,6 +3359,7 @@ class _PaneHead extends StatelessWidget {
               onTap: a.onTap,
               palette: palette,
             ),
+          if (trailing != null) trailing!,
         ],
       ),
     );

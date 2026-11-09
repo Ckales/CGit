@@ -390,6 +390,14 @@ pub fn read_worktree_file(path: String, file: String) -> Result<String, String> 
     cgit_core::read_worktree_file(path, file)
 }
 
+pub fn read_conflict_worktree(path: String, file: String) -> Result<Option<String>, String> {
+    cgit_core::read_conflict_worktree(path, file)
+}
+
+pub fn resolve_deleted_conflict(path: String, file: String) -> Result<(), String> {
+    cgit_core::resolve_deleted_conflict(path, file)
+}
+
 pub fn open_in_editor(path: String, file: String, editor: String) -> Result<(), String> {
     cgit_core::open_in_editor(path, file, editor)
 }

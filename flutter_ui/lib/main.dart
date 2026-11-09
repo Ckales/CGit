@@ -1735,14 +1735,52 @@ class _RepoScreenState extends State<RepoScreen> {
     final git = _git;
     if (git == null) return;
     try {
-      final content = await git.readFile(file);
-      if (!mounted) return;
+      final content = await git.readConflictFile(file);
+      final conflicts = await git.conflicts();
+      if (!mounted || git != _git) return;
+      if (!conflicts.contains(file)) {
+        await _refreshLight();
+        if (mounted && git == _git) {
+          setState(() => _status = '$file 的冲突已在外部解决');
+        }
+        return;
+      }
+      if (content == null) {
+        await _refreshLight();
+        if (!mounted || git != _git || !_conflicts.contains(file)) return;
+        final keepDeletion = await showAppDialog<bool>(
+          context,
+          title: '冲突文件已删除',
+          badge: DialogBadge.info,
+          maxWidth: 480,
+          body: DialogText(
+            '工作区中的 "$file" 已不存在，但 Git 仍将它记录为未解决的冲突。'
+            '\n确认保留删除后，将仅标记此文件的删除，不会创建空文件。',
+          ),
+          actions: [
+            DialogButton('取消', onTap: () => Navigator.of(context).pop(false)),
+            DialogButton(
+              '保留删除并标记解决',
+              kind: DialogButtonKind.primary,
+              onTap: () => Navigator.of(context).pop(true),
+            ),
+          ],
+        );
+        if (keepDeletion != true || !mounted || git != _git) return;
+        await git.resolveDeletedConflict(file);
+        await _refresh();
+        if (mounted && git == _git) {
+          setState(() => _status = '已保留删除 — $file');
+        }
+        return;
+      }
       setState(() {
         _mergeFile = file;
         _mergeContent = content;
       });
     } on GitError catch (e) {
-      if (mounted) _fail(e.message);
+      await _refreshLight();
+      if (mounted && git == _git) _fail(e.message);
     }
   }
 

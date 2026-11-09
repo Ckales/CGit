@@ -1784,10 +1784,107 @@ pub fn resolve_with_content(path: String, file: String, content: String) -> Resu
     Ok(())
 }
 
+// `read_to_string` follows symlinks; a dangling link can therefore report
+// NotFound even though the conflicted worktree entry itself still exists.
+fn ensure_no_dangling_symlink_in_path(path: &Path) -> Result<(), String> {
+    let components: Vec<_> = path.components().collect();
+    let mut prefix = PathBuf::new();
+
+    for (index, component) in components.iter().enumerate() {
+        prefix.push(component.as_os_str());
+        let metadata = match std::fs::symlink_metadata(&prefix) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error.to_string()),
+        };
+
+        let target_metadata = if metadata.file_type().is_symlink() {
+            std::fs::metadata(&prefix).map_err(|error| error.to_string())?
+        } else {
+            metadata
+        };
+        if index + 1 < components.len() && !target_metadata.is_dir() {
+            return Err(format!("工作区路径组件不是目录：{}", prefix.display()));
+        }
+    }
+
+    Ok(())
+}
+
+fn worktree_entry_is_missing(path: &Path) -> Result<bool, String> {
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => Ok(false),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            ensure_no_dangling_symlink_in_path(path)?;
+            match std::fs::symlink_metadata(path) {
+                Ok(_) => Ok(false),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
+                Err(error) => Err(error.to_string()),
+            }
+        }
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+fn read_conflict_worktree_path(path: &Path) -> Result<Option<String>, String> {
+    match std::fs::read_to_string(path) {
+        Ok(content) => Ok(Some(content)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            if worktree_entry_is_missing(path)? {
+                Ok(None)
+            } else {
+                Err(error.to_string())
+            }
+        }
+        Err(error) => Err(error.to_string()),
+    }
+}
+
 pub fn read_worktree_file(path: String, file: String) -> Result<String, String> {
     let repo = open(&path)?;
     let wd = repo.workdir().ok_or("仓库没有工作目录")?;
     std::fs::read_to_string(wd.join(&file)).map_err(|e| e.to_string())
+}
+
+/// Read a conflicted worktree file, returning `None` only when its path is absent.
+pub fn read_conflict_worktree(path: String, file: String) -> Result<Option<String>, String> {
+    let repo = open(&path)?;
+    let wd = repo.workdir().ok_or("仓库没有工作目录")?;
+    read_conflict_worktree_path(&wd.join(&file))
+}
+
+/// Resolve a conflict by marking the absent worktree file as deleted in the index.
+pub fn resolve_deleted_conflict(path: String, file: String) -> Result<(), String> {
+    let repo = open(&path)?;
+    let wd = repo.workdir().ok_or("仓库没有工作目录")?;
+    let index = repo.index_or_empty().map_err(|error| error.to_string())?;
+    let has_conflict = index.entries().iter().any(|entry| {
+        entry.stage() != gix::index::entry::Stage::Unconflicted
+            && entry.path(&index).to_string() == file
+    });
+    if !has_conflict {
+        return Err("文件已不处于未解决的冲突状态".to_string());
+    }
+
+    let worktree_file = wd.join(&file);
+    if !worktree_entry_is_missing(&worktree_file)? {
+        return Err("工作区文件已存在，拒绝按删除解决冲突".to_string());
+    }
+
+    // `--cached` leaves a file restored after the validation untouched, and
+    // `--literal-pathspecs` prevents glob characters in a filename widening it.
+    run_git(
+        &path,
+        &[
+            "--literal-pathspecs",
+            "rm",
+            "--cached",
+            "--force",
+            "--",
+            file.as_str(),
+        ],
+    )?;
+    Ok(())
 }
 
 /// 用外部编辑器打开工作区里的文件。`editor` 是应用名（如 `Visual Studio Code`），
@@ -3741,6 +3838,80 @@ mod tests {
         assert_eq!(f.len(), 1, "冲突文件应只有一行，实际：{f:?}");
         assert_eq!(f[0].status, "conflict");
         assert_eq!(get_conflicts(repo).unwrap(), vec!["f".to_string()]);
+    }
+
+    fn temp_fs_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("cgit-{name}-{}", temp_token()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn conflict_worktree_read_distinguishes_missing_empty_and_read_errors() {
+        let dir = temp_fs_dir("conflict-read");
+        assert_eq!(
+            read_conflict_worktree_path(&dir.join("missing")).unwrap(),
+            None
+        );
+
+        let empty = dir.join("empty");
+        std::fs::write(&empty, "").unwrap();
+        assert_eq!(
+            read_conflict_worktree_path(&empty).unwrap(),
+            Some(String::new())
+        );
+
+        let text = dir.join("text");
+        std::fs::write(&text, "ours\n").unwrap();
+        assert_eq!(
+            read_conflict_worktree_path(&text).unwrap(),
+            Some("ours\n".to_string())
+        );
+
+        let directory = dir.join("directory");
+        std::fs::create_dir(&directory).unwrap();
+        assert!(read_conflict_worktree_path(&directory).is_err());
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+
+            let dangling_file = dir.join("dangling-file");
+            symlink(dir.join("missing-target"), &dangling_file).unwrap();
+            assert!(read_conflict_worktree_path(&dangling_file).is_err());
+
+            let dangling_parent = dir.join("dangling-parent");
+            symlink(dir.join("missing-directory"), &dangling_parent).unwrap();
+            assert!(read_conflict_worktree_path(&dangling_parent.join("file")).is_err());
+        }
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn deleted_conflict_guard_requires_a_truly_missing_worktree_entry() {
+        let dir = temp_fs_dir("deleted-conflict-guard");
+        let missing = dir.join("missing");
+        assert!(worktree_entry_is_missing(&missing).unwrap());
+
+        let existing = dir.join("existing");
+        std::fs::write(&existing, "restored\n").unwrap();
+        assert!(!worktree_entry_is_missing(&existing).unwrap());
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+
+            let dangling_file = dir.join("dangling-file");
+            symlink(dir.join("missing-target"), &dangling_file).unwrap();
+            assert!(!worktree_entry_is_missing(&dangling_file).unwrap());
+
+            let dangling_parent = dir.join("dangling-parent");
+            symlink(dir.join("missing-directory"), &dangling_parent).unwrap();
+            assert!(worktree_entry_is_missing(&dangling_parent.join("file")).is_err());
+        }
+
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

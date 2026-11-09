@@ -523,6 +523,14 @@ class Git {
   Future<String> readFile(String file) =>
       _guard(() => rust.readWorktreeFile(path: repo, file: file));
 
+  /// Null means the worktree entry was deleted, rather than an empty file.
+  Future<String?> readConflictFile(String file) =>
+      _guard(() => rust.readConflictWorktree(path: repo, file: file));
+
+  /// Keep a missing conflict deleted, only after the user's confirmation.
+  Future<void> resolveDeletedConflict(String file) =>
+      _guard(() => rust.resolveDeletedConflict(path: repo, file: file));
+
   /// Resolve a whole file to one side — the fallback for conflicts with no text
   /// markers (binary, add/add).
   Future<void> resolveSide(String file, String side) =>

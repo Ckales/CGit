@@ -42,6 +42,8 @@ void main() {
     await t.pumpAndSettle();
     expect(writes, 0);
     expect(find.textContaining('1 个冲突'), findsOneWidget);
+    await t.tap(find.text('取消'));
+    await t.pumpAndSettle();
     await t.tap(find.text('取消应用'));
     await t.pumpAndSettle();
     expect(discarded, 'test');

@@ -242,6 +242,16 @@ Future<void> resolveWithContent(
 Future<String> readWorktreeFile({required String path, required String file}) =>
     RustLib.instance.api.crateApiGitReadWorktreeFile(path: path, file: file);
 
+Future<String?> readConflictWorktree(
+        {required String path, required String file}) =>
+    RustLib.instance.api
+        .crateApiGitReadConflictWorktree(path: path, file: file);
+
+Future<void> resolveDeletedConflict(
+        {required String path, required String file}) =>
+    RustLib.instance.api
+        .crateApiGitResolveDeletedConflict(path: path, file: file);
+
 Future<void> openInEditor(
         {required String path, required String file, required String editor}) =>
     RustLib.instance.api
@@ -355,6 +365,21 @@ Future<String> pushBranch({required String path, required String name}) =>
 
 Future<String> gitPushForce({required String path}) =>
     RustLib.instance.api.crateApiGitGitPushForce(path: path);
+
+Future<String> preparePatchImport(
+        {required String path, required String patch}) =>
+    RustLib.instance.api
+        .crateApiGitPreparePatchImport(path: path, patch: patch);
+
+Future<void> finishPatchImport(
+        {required String path,
+        required String token,
+        required String resolutions}) =>
+    RustLib.instance.api.crateApiGitFinishPatchImport(
+        path: path, token: token, resolutions: resolutions);
+
+Future<void> discardPatchImport({required String token}) =>
+    RustLib.instance.api.crateApiGitDiscardPatchImport(token: token);
 
 class BlameLine {
   final String oid;

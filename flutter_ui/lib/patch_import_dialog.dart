@@ -144,9 +144,11 @@ class _PatchImportDialogState extends State<PatchImportDialog> {
                   ])),
                   Expanded(child: PatchPreview(text: file.patch, file: file.path, mode: _mode)),
                 ]);
-                if (box.maxWidth < 720) return Column(children: [
-                  SizedBox(height: box.maxHeight * .4, child: list), Expanded(child: preview),
-                ]);
+                if (box.maxWidth < 720) {
+                  return Column(children: [
+                    SizedBox(height: box.maxHeight * .4, child: list), Expanded(child: preview),
+                  ]);
+                }
                 return Row(children: [
                   SizedBox(width: (box.maxWidth * .3).clamp(220, 340), child: list),
                   VerticalDivider(width: 1, color: p.border), Expanded(child: preview),

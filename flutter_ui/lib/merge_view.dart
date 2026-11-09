@@ -25,9 +25,12 @@ class MergeWindow extends StatefulWidget {
     required this.onResolveWith,
     required this.onResolveSide,
     required this.onToggleBase,
+    this.patchImport = false,
   });
 
   final String file;
+
+  final bool patchImport;
 
   /// The worktree file, markers and all.
   final String content;
@@ -209,7 +212,7 @@ class _MergeWindowState extends State<MergeWindow> {
         ),
         child: Row(
           children: [
-            Text('合并 — ${widget.file}', style: ui.copyWith(color: p.text)),
+            Text('${widget.patchImport ? '补丁冲突' : '合并'} — ${widget.file}', style: ui.copyWith(color: p.text)),
             const Spacer(),
             if (_conflicts.isNotEmpty) ...[
               Text(
@@ -308,10 +311,10 @@ class _MergeWindowState extends State<MergeWindow> {
         ),
         child: Row(
           children: [
-            for (final label in const [
-              '我方（当前分支）',
+            for (final label in [
+              widget.patchImport ? '本地版本' : '我方（当前分支）',
               '结果（可编辑）',
-              '对方（传入）',
+              widget.patchImport ? '补丁版本' : '对方（传入）',
             ])
               Expanded(
                 child: Padding(
@@ -473,7 +476,7 @@ class _MergeWindowState extends State<MergeWindow> {
                 opacity: dim ? 0.6 : 1,
                 child: Text.rich(
                   _syntax.cached(text, mono.copyWith(color: p.text),
-                      dark: Syntax.isDark(p)),
+                      dark: Syntax.isDark(p), theme: Theming.syntaxOf(context)),
                   softWrap: false,
                   maxLines: null,
                 ),
@@ -553,7 +556,7 @@ class _MergeWindowState extends State<MergeWindow> {
       const Spacer(),
       _Btn(label: '全部采用我方', onTap: () => _setAll(true, false)),
       _Btn(label: '全部采用对方', onTap: () => _setAll(false, true)),
-      _Btn(
+      if (!widget.patchImport) _Btn(
         label: _hasBase ? '隐藏共同祖先' : '显示共同祖先',
         onTap: () => widget.onToggleBase(!_hasBase),
       ),

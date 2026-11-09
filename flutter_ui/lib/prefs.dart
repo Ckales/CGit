@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'syntax_theme.dart';
+
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// Window and view settings that survive a restart.
@@ -12,6 +14,7 @@ class Prefs {
   Prefs._(this._store);
 
   static const _keyTheme = 'cgit.theme';
+  static const _keySyntaxTheme = 'cgit.syntaxTheme';
   static const _keyDiffView = 'cgit.diffView';
   static const _keySidebarWidth = 'cgit.sidebarWidth';
   static const _keyHistoryHeight = 'cgit.historyHeight';
@@ -40,6 +43,11 @@ class Prefs {
   bool get isDark => _store.getString(_keyTheme) != 'light';
   Future<void> setDark(bool dark) =>
       _store.setString(_keyTheme, dark ? 'dark' : 'light');
+
+  SyntaxTheme get syntaxTheme =>
+      SyntaxTheme.fromName(_store.getString(_keySyntaxTheme));
+  Future<void> setSyntaxTheme(SyntaxTheme theme) =>
+      _store.setString(_keySyntaxTheme, theme.name);
 
   /// The commit sheet's change list: flat paths instead of a folder tree.
   bool get isFlatChanges => _store.getBool(_keyFlatChanges) ?? false;

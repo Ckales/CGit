@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:cgit_flutter/ai_settings.dart';
 import 'package:cgit_flutter/git.dart';
 import 'package:cgit_flutter/prefs.dart';
 import 'package:cgit_flutter/settings_sheet.dart';
 import 'package:cgit_flutter/theme.dart';
+import 'package:cgit_flutter/syntax_theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -67,17 +70,26 @@ class _FakeGit implements Git {
       throw UnsupportedError('${i.memberName} not needed here');
 }
 
+class _LoadingGit extends _FakeGit {
+  final pendingIdentity = Completer<Identity>();
+
+  @override
+  Future<Identity> identity() => pendingIdentity.future;
+}
+
 /// The look the dialog last applied, so the preview and its undo are visible.
 class Look {
   bool? dark;
   int? fontSize;
+  SyntaxTheme? syntaxTheme;
 }
 
 late Prefs prefs;
 late Look look;
 int savedCount = 0;
 
-Future<void> _pump(WidgetTester tester, {Git? git, AiSettings? ai}) async {
+Future<void> _pump(WidgetTester tester,
+    {Git? git, AiSettings? ai, ValueNotifier<AiSettings?>? aiUpdates}) async {
   look = Look();
   savedCount = 0;
   await tester.pumpWidget(
@@ -88,16 +100,20 @@ Future<void> _pump(WidgetTester tester, {Git? git, AiSettings? ai}) async {
           type: MaterialType.transparency,
           child: Stack(
             children: [
-              SettingsSheet(
-                git: git,
-                prefs: prefs,
-                ai: ai,
-                onClose: () {},
-                onPreview: (d, f) {
-                  look.dark = d;
-                  look.fontSize = f;
-                },
-                onSaved: () => savedCount++,
+              ValueListenableBuilder<AiSettings?>(
+                valueListenable: aiUpdates ?? ValueNotifier(ai),
+                builder: (context, currentAi, child) => SettingsSheet(
+                  git: git,
+                  prefs: prefs,
+                  ai: currentAi,
+                  onClose: () {},
+                  onPreview: (d, f, s) {
+                    look.dark = d;
+                    look.fontSize = f;
+                    look.syntaxTheme = s;
+                  },
+                  onSaved: () => savedCount++,
+                ),
               ),
             ],
           ),
@@ -122,6 +138,54 @@ void main() {
     prefs = await Prefs.load();
   });
 
+  testWidgets('saving while Git information loads preserves AI settings',
+      (tester) async {
+    final ai = await AiSettings.load();
+    await ai.setBaseUrl('https://example.com/v1');
+    await ai.setModel('custom-model');
+    await ai.setPrompt('custom prompt');
+    await ai.writeToken('test-token');
+    final git = _LoadingGit();
+
+    await _pump(tester, git: git, ai: ai);
+    await tester.tap(find.text('保存'));
+    await tester.pumpAndSettle();
+
+    expect(ai.baseUrl, 'https://example.com/v1');
+    expect(ai.model, 'custom-model');
+    expect(ai.prompt, 'custom prompt');
+    expect(await ai.readToken(), 'test-token');
+    expect(savedCount, 1);
+    await tester.pumpWidget(const SizedBox());
+    git.pendingIdentity.complete(const Identity(name: '', email: ''));
+    await tester.pump();
+  });
+
+  testWidgets('AI fields load immediately and late Git results keep edits',
+      (tester) async {
+    final ai = await AiSettings.load();
+    await ai.setBaseUrl('https://example.com/v1');
+    await ai.setModel('custom-model');
+    await ai.setPrompt('custom prompt');
+    final git = _LoadingGit();
+
+    await _pump(tester, git: git, ai: ai);
+    await _openPane(tester, 'AI');
+    expect(find.text('https://example.com/v1'), findsOneWidget);
+    expect(find.text('custom-model'), findsOneWidget);
+    expect(find.text('custom prompt'), findsOneWidget);
+    final model =
+        find.descendant(of: _rowOf('模型'), matching: find.byType(TextField));
+    await tester.enterText(model, 'edited-model');
+
+    git.pendingIdentity.complete(const Identity(name: '', email: ''));
+    await tester.pumpAndSettle();
+    expect(tester.widget<TextField>(model).controller!.text, 'edited-model');
+    await tester.tap(find.text('保存'));
+    await tester.pumpAndSettle();
+    expect(ai.model, 'edited-model');
+  });
+
   testWidgets('a typed ai token is saved with 保存', (tester) async {
     final ai = await AiSettings.load();
     await _pump(tester, ai: ai);
@@ -134,6 +198,33 @@ void main() {
 
     expect(await ai.readToken(), 'sk-test');
     expect(savedCount, 1);
+  });
+
+  testWidgets('late AI settings fill untouched fields and preserve edits',
+      (tester) async {
+    final ai = await AiSettings.load();
+    await ai.setBaseUrl('https://example.com/v1');
+    await ai.setModel('custom-model');
+    await ai.setPrompt('custom prompt');
+    final updates = ValueNotifier<AiSettings?>(null);
+    await _pump(tester, aiUpdates: updates);
+    await _openPane(tester, 'AI');
+    final model =
+        find.descendant(of: _rowOf('模型'), matching: find.byType(TextField));
+    await tester.enterText(model, 'typed-model');
+
+    updates.value = ai;
+    await tester.pumpAndSettle();
+    expect(find.text('https://example.com/v1'), findsOneWidget);
+    expect(find.text('custom prompt'), findsOneWidget);
+    expect(tester.widget<TextField>(model).controller!.text, 'typed-model');
+    await tester.tap(find.text('保存'));
+    await tester.pumpAndSettle();
+    expect(ai.baseUrl, 'https://example.com/v1');
+    expect(ai.model, 'typed-model');
+    expect(ai.prompt, 'custom prompt');
+    await tester.pumpWidget(const SizedBox());
+    updates.dispose();
   });
 
   group('panes', () {
@@ -163,8 +254,38 @@ void main() {
   });
 
   group('live preview', () {
-    testWidgets('主题 applies immediately and 取消 puts it back',
-        (tester) async {
+    for (final theme in SyntaxTheme.values.skip(1)) {
+      testWidgets('${theme.label} previews, cancels and persists independently',
+          (tester) async {
+        await _pump(tester);
+        await _openPane(tester, '外观');
+        await tester.tap(find.text(SyntaxTheme.atomOne.label));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text(theme.label).last);
+        await tester.pumpAndSettle();
+        expect(look.syntaxTheme, theme);
+        expect(look.dark, isTrue);
+        expect(prefs.syntaxTheme, SyntaxTheme.atomOne);
+        await tester.tap(find.text('取消'));
+        await tester.pumpAndSettle();
+        expect(look.syntaxTheme, SyntaxTheme.atomOne);
+        expect(prefs.syntaxTheme, SyntaxTheme.atomOne);
+
+        await tester.pumpWidget(const SizedBox());
+        await _pump(tester);
+        await _openPane(tester, '外观');
+        await tester.tap(find.text(SyntaxTheme.atomOne.label));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text(theme.label).last);
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('保存'));
+        await tester.pumpAndSettle();
+        expect((await Prefs.load()).syntaxTheme, theme);
+        expect(savedCount, 1);
+      });
+    }
+
+    testWidgets('主题 applies immediately and 取消 puts it back', (tester) async {
       await _pump(tester, git: _FakeGit());
       await _openPane(tester, '外观');
 

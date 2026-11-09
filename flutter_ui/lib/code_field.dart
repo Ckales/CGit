@@ -35,8 +35,13 @@ import 'package:re_highlight/languages/yaml.dart';
 import 'package:re_highlight/re_highlight.dart';
 import 'package:re_highlight/styles/atom-one-dark.dart';
 import 'package:re_highlight/styles/atom-one-light.dart';
+import 'package:re_highlight/styles/base16/dracula.dart';
+import 'package:re_highlight/styles/monokai.dart';
+import 'package:re_highlight/styles/github.dart';
+import 'package:re_highlight/styles/github-dark.dart';
 
 import 'theme.dart';
+import 'syntax_theme.dart';
 
 /// ponytail: a hand-picked set of grammars, not re_highlight's all 197 — the
 /// rest only add binary size. Add a line here when a repo needs one.
@@ -81,6 +86,18 @@ Map<String, TextStyle> _themeOf(Map<String, TextStyle> theme) =>
     {...theme}..remove('root');
 final _dark = _themeOf(atomOneDarkTheme);
 final _light = _themeOf(atomOneLightTheme);
+final _dracula = _themeOf(draculaTheme);
+final _monokai = _themeOf(monokaiTheme);
+final _github = _themeOf(githubTheme);
+final _githubDark = _themeOf(githubDarkTheme);
+
+Map<String, TextStyle> _colours(SyntaxTheme theme, bool dark) =>
+    switch (theme) {
+      SyntaxTheme.atomOne => dark ? _dark : _light,
+      SyntaxTheme.dracula => _dracula,
+      SyntaxTheme.monokai => _monokai,
+      SyntaxTheme.github => dark ? _githubDark : _github,
+    };
 
 /// One file's syntax colouring, picked by extension (grammar aliases cover
 /// py / ts / rs / yml …); Dockerfile and Makefile go by their whole name.
@@ -88,7 +105,7 @@ class Syntax {
   Syntax(String file) : _language = _languageFor(file);
 
   final String? _language;
-  final _cache = <(String, TextStyle, bool), TextSpan>{};
+  final _cache = <(String, TextStyle, bool, SyntaxTheme), TextSpan>{};
 
   static String? _languageFor(String file) {
     final name = file.split('/').last.toLowerCase();
@@ -99,19 +116,21 @@ class Syntax {
 
   static bool isDark(Palette p) => p.bg.computeLuminance() < 0.5;
 
-  TextSpan highlight(String text, TextStyle base, {required bool dark}) {
+  TextSpan highlight(String text, TextStyle base,
+      {required bool dark, SyntaxTheme theme = SyntaxTheme.atomOne}) {
     final language = _language;
     if (language == null) return TextSpan(text: text, style: base);
     final result = _highlight.highlight(code: text, language: language);
-    final renderer = TextSpanRenderer(base, dark ? _dark : _light);
+    final renderer = TextSpanRenderer(base, _colours(theme, dark));
     result.render(renderer);
     return renderer.span ?? TextSpan(text: text, style: base);
   }
 
   /// For text that does not change, like the two sides of a merge.
-  TextSpan cached(String text, TextStyle base, {required bool dark}) =>
-      _cache.putIfAbsent(
-          (text, base, dark), () => highlight(text, base, dark: dark));
+  TextSpan cached(String text, TextStyle base,
+          {required bool dark, SyntaxTheme theme = SyntaxTheme.atomOne}) =>
+      _cache.putIfAbsent((text, base, dark, theme),
+          () => highlight(text, base, dark: dark, theme: theme));
 }
 
 /// A controller whose text paints through [Syntax].
@@ -120,6 +139,8 @@ class CodeController extends TextEditingController {
 
   final Syntax syntax;
   bool dark = true;
+  SyntaxTheme theme = SyntaxTheme.atomOne;
+  SyntaxTheme? _lastTheme;
 
   String? _lastText;
   TextStyle? _lastStyle;
@@ -138,11 +159,15 @@ class CodeController extends TextEditingController {
           context: context, style: style, withComposing: withComposing);
     }
     final base = style ?? const TextStyle();
-    if (text != _lastText || base != _lastStyle || dark != _lastDark) {
+    if (text != _lastText ||
+        base != _lastStyle ||
+        dark != _lastDark ||
+        theme != _lastTheme) {
       _lastText = text;
       _lastStyle = base;
       _lastDark = dark;
-      _lastSpan = syntax.highlight(text, base, dark: dark);
+      _lastTheme = theme;
+      _lastSpan = syntax.highlight(text, base, dark: dark, theme: theme);
     }
     return _lastSpan!;
   }
@@ -244,6 +269,7 @@ class CodeField extends StatelessWidget {
   Widget build(BuildContext context) {
     final p = Theming.of(context);
     controller.dark = Syntax.isDark(p);
+    controller.theme = Theming.syntaxOf(context);
     return Focus(
       canRequestFocus: false,
       skipTraversal: true,

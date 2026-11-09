@@ -10,6 +10,8 @@ import 'git_text.dart';
 import 'op_log.dart';
 import 'prefs.dart';
 import 'theme.dart';
+import 'syntax_theme.dart';
+import 'code_field.dart';
 import 'update_check.dart';
 
 /// 设置：通用 / 外观 / 编辑器 / Git 信息 / AI。
@@ -43,7 +45,8 @@ class SettingsSheet extends StatefulWidget {
   final VoidCallback onClose;
 
   /// Applies 主题 / 字号 without persisting, for the live preview.
-  final void Function(bool dark, int fontSize) onPreview;
+  final void Function(bool dark, int fontSize, SyntaxTheme syntaxTheme)
+      onPreview;
 
   /// Everything saved and persisted; the caller re-reads prefs and refreshes.
   final VoidCallback onSaved;
@@ -65,6 +68,7 @@ class _SettingsSheetState extends State<SettingsSheet> {
   /* ---------- 外观 ---------- */
   late bool _dark = widget.prefs.isDark;
   late int _fontSize = widget.prefs.fontSize;
+  late SyntaxTheme _syntaxTheme = widget.prefs.syntaxTheme;
   late bool _split = widget.prefs.isSplitDiff;
 
   /* ---------- 编辑器 ---------- */
@@ -90,6 +94,8 @@ class _SettingsSheetState extends State<SettingsSheet> {
   final _aiModel = TextEditingController();
   final _aiToken = TextEditingController();
   final _aiPrompt = TextEditingController();
+  final _editedAiFields = <TextEditingController>{};
+  bool _loadingAiFields = false;
   bool _aiTokenStored = false;
   String _aiResult = '';
   bool _aiFailed = false;
@@ -106,7 +112,39 @@ class _SettingsSheetState extends State<SettingsSheet> {
   @override
   void initState() {
     super.initState();
+    for (final field in [_aiUrl, _aiModel, _aiPrompt]) {
+      field.addListener(() {
+        if (!_loadingAiFields) _editedAiFields.add(field);
+      });
+    }
+    _loadAi();
     _loadAll();
+  }
+
+  @override
+  void didUpdateWidget(covariant SettingsSheet oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.ai != widget.ai) _loadAi();
+  }
+
+  Future<void> _loadAi() async {
+    final ai = widget.ai;
+    if (ai == null) return;
+    // These values are already in memory. Fill them before any Git/editor
+    // awaits, so saving another pane cannot overwrite them with empty fields.
+    _loadingAiFields = true;
+    for (final (field, value) in [
+      (_aiUrl, ai.baseUrl),
+      (_aiModel, ai.model),
+      (_aiPrompt, ai.prompt),
+    ]) {
+      if (!_editedAiFields.contains(field)) field.text = value;
+    }
+    _loadingAiFields = false;
+    final hasToken = await ai.readToken() != null;
+    if (mounted && widget.ai == ai) {
+      setState(() => _aiTokenStored = hasToken);
+    }
   }
 
   @override
@@ -162,17 +200,6 @@ class _SettingsSheetState extends State<SettingsSheet> {
       // looks like "no editors installed".
       if (mounted) setState(() => _editorScanError = '$e');
     }
-
-    final ai = widget.ai;
-    if (ai != null && mounted) {
-      setState(() {
-        _aiUrl.text = ai.baseUrl;
-        _aiModel.text = ai.model;
-        _aiPrompt.text = ai.prompt;
-      });
-      final has = await ai.readToken() != null;
-      if (mounted) setState(() => _aiTokenStored = has);
-    }
   }
 
   /// Every editor to list: the ones on this machine plus any still ticked from
@@ -188,12 +215,13 @@ class _SettingsSheetState extends State<SettingsSheet> {
         _messageIsError = isError;
       });
 
-  void _preview() => widget.onPreview(_dark, _fontSize);
+  void _preview() => widget.onPreview(_dark, _fontSize, _syntaxTheme);
 
   void _cancel() {
     // Put the live preview back before leaving, or cancelling would keep the
     // very thing it was supposed to discard.
-    widget.onPreview(widget.prefs.isDark, widget.prefs.fontSize);
+    widget.onPreview(
+        widget.prefs.isDark, widget.prefs.fontSize, widget.prefs.syntaxTheme);
     widget.onClose();
   }
 
@@ -203,6 +231,7 @@ class _SettingsSheetState extends State<SettingsSheet> {
     await prefs.setHistoryPageSize(_pageSize);
     await prefs.setOpLog(_opLog);
     await prefs.setDark(_dark);
+    await prefs.setSyntaxTheme(_syntaxTheme);
     await prefs.setFontSize(_fontSize);
     await prefs.setSplitDiff(_split);
     await prefs.setEditors(_chosen.toList()..sort());
@@ -599,6 +628,33 @@ class _SettingsSheetState extends State<SettingsSheet> {
         ),
         _row(
           p,
+          '语法配色',
+          _select(p, _syntaxTheme.name, {
+            for (final theme in SyntaxTheme.values) theme.name: theme.label
+          }, (v) {
+            setState(() => _syntaxTheme = SyntaxTheme.fromName(v));
+            _preview();
+          }),
+        ),
+        Container(
+          margin: const EdgeInsets.only(bottom: 12),
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: p.diffBg,
+            border: Border.all(color: p.border),
+            borderRadius: BorderRadius.circular(6),
+          ),
+          child: Text.rich(
+            Syntax('preview.dart').highlight(
+              '// 语法配色预览\nconst message = "Hello, CGit";\nprint(message);',
+              mono.copyWith(color: p.text),
+              dark: _dark,
+              theme: _syntaxTheme,
+            ),
+          ),
+        ),
+        _row(
+          p,
           '字号',
           _select(p, '$_fontSize', const {
             '12': '小 (12)',
@@ -621,7 +677,7 @@ class _SettingsSheetState extends State<SettingsSheet> {
               },
               (v) => setState(() => _split = v == 'split')),
         ),
-        _hint(p, '主题和字号立即生效，点「取消」会还原。'),
+        _hint(p, '主题、语法配色和字号立即生效，点「取消」会还原。'),
       ];
 
   /* ---------- 编辑器 ---------- */

@@ -1,6 +1,8 @@
 // Twice on purpose: unprefixed so the generated types can be named bare, and
 // prefixed so calls like `rust.commit(...)` do not collide with this class's
 // own methods of the same name.
+import 'dart:convert';
+
 import 'package:flutter/services.dart';
 
 import 'op_log.dart';
@@ -329,6 +331,15 @@ class Git {
   /// Apply a patch to the *worktree* — core's `apply_patch`, not `apply_hunk`.
   /// git applies all or nothing, so a patch that does not fit leaves the tree
   /// untouched rather than half-applied.
+  Future<Map<String, dynamic>> preparePatchImport(String patch) => _guard(() async =>
+      jsonDecode(await rust.preparePatchImport(path: repo, patch: patch)) as Map<String, dynamic>);
+
+  Future<void> finishPatchImport(String token, Map<String, Map<String, String>> resolutions) =>
+      _guard(() => rust.finishPatchImport(path: repo, token: token, resolutions: jsonEncode(resolutions)));
+
+  Future<void> discardPatchImport(String token) =>
+      _guard(() => rust.discardPatchImport(token: token));
+
   Future<void> applyPatchFile(String patch) =>
       _guard(() => rust.applyPatch(path: repo, patch: patch));
 

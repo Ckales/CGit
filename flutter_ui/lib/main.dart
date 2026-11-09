@@ -22,6 +22,7 @@ import 'history_view.dart';
 import 'merge_view.dart';
 import 'network_ops.dart';
 import 'op_log.dart';
+import 'patch_import_dialog.dart';
 import 'prefs.dart';
 import 'dialogs.dart';
 import 'prompt.dart';
@@ -30,6 +31,7 @@ import 'rebase_plan.dart';
 import 'rebase_sheet.dart';
 import 'settings_sheet.dart';
 import 'theme.dart';
+import 'syntax_theme.dart';
 import 'update_check.dart';
 import 'watch_debounce.dart';
 
@@ -62,12 +64,14 @@ class CGitApp extends StatefulWidget {
 class _CGitAppState extends State<CGitApp> {
   late Palette _palette = widget.prefs.isDark ? Palette.dark : Palette.light;
   late int _fontSize = widget.prefs.fontSize;
+  late SyntaxTheme _syntaxTheme = widget.prefs.syntaxTheme;
 
   /// Theme and font size, applied without saving. The settings dialog previews
   /// with this and puts the stored values back when it is cancelled.
-  void _apply(bool dark, int fontSize) => setState(() {
+  void _apply(bool dark, int fontSize, SyntaxTheme syntaxTheme) => setState(() {
         _palette = dark ? Palette.dark : Palette.light;
         _fontSize = fontSize;
+        _syntaxTheme = syntaxTheme;
       });
 
   @override
@@ -91,6 +95,7 @@ class _CGitAppState extends State<CGitApp> {
           ),
           child: Theming(
             palette: _palette,
+            syntaxTheme: _syntaxTheme,
             // This app draws its own chrome rather than using Scaffold, and
             // Scaffold is what normally supplies the Material ancestor that
             // TextField and the other material widgets assert on. Without this,
@@ -172,7 +177,7 @@ class RepoScreen extends StatefulWidget {
   final Prefs prefs;
 
   /// Applies 主题 / 字号 to the whole app without saving them.
-  final void Function(bool dark, int fontSize) onApplyLook;
+  final void Function(bool dark, int fontSize, SyntaxTheme syntaxTheme) onApplyLook;
 
   @override
   State<RepoScreen> createState() => _RepoScreenState();
@@ -1339,10 +1344,27 @@ class _RepoScreenState extends State<RepoScreen> {
         if (mounted) setState(() => _status = '$from 没有补丁内容');
         return;
       }
-      await git.applyPatchFile(patch);
-      await _refresh();
-      if (mounted) setState(() => _status = '已从$from应用补丁');
+      final files = splitImportPatch(patch);
+      if (!mounted) return;
+      final palette = Theming.of(context);
+      final syntaxTheme = Theming.syntaxOf(context);
+      final applied = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => Theming(palette: palette, syntaxTheme: syntaxTheme, child: PatchImportDialog(
+          files: files, source: from,
+          prepare: (text) async => PreparedPatch.fromJson(await git.preparePatchImport(text)),
+          finish: git.finishPatchImport,
+          discard: git.discardPatchImport,
+        )),
+      );
+      if (applied == true) {
+        await _refresh();
+        if (mounted) setState(() => _status = '已从$from应用补丁');
+      }
     } on GitError catch (e) {
+      if (mounted) _fail(e.message);
+    } on FormatException catch (e) {
       if (mounted) _fail(e.message);
     }
   }
@@ -1893,6 +1915,8 @@ class _RepoScreenState extends State<RepoScreen> {
           if (_cloneOpen) {
             setState(() => _cloneOpen = false);
           } else if (_settingsOpen) {
+            widget.onApplyLook(widget.prefs.isDark, widget.prefs.fontSize,
+                widget.prefs.syntaxTheme);
             setState(() => _settingsOpen = false);
           } else if (_rebasePlan != null) {
             setState(() => _rebasePlan = null);

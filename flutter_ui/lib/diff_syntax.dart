@@ -3,11 +3,13 @@ import 'package:flutter/material.dart';
 import 'code_field.dart';
 import 'git_text.dart';
 import 'theme.dart';
+import 'syntax_theme.dart';
 
 /// Parse each side separately so removed text cannot change the syntax state
 /// of added text. Multi-line tokens keep their colour within the hunk.
 class DiffSyntax {
-  DiffSyntax(String hunk, String file, Palette palette) {
+  DiffSyntax(String hunk, String file, Palette palette,
+      {SyntaxTheme theme = SyntaxTheme.atomOne}) {
     final body = hunk.replaceFirst(RegExp(r'\n$'), '').split('\n').skip(1);
     final head = parseHunkHeader(hunk.split('\n').first);
     var oldNo = head?.oldStart ?? 0;
@@ -33,7 +35,7 @@ class DiffSyntax {
     void colour(List<String> text, List<int> numbers, Map<int, TextSpan> out) {
       if (text.isEmpty) return;
       final spans = _lines(syntax.highlight(text.join('\n'), base,
-          dark: Syntax.isDark(palette)));
+          dark: Syntax.isDark(palette), theme: theme));
       for (var i = 0; i < numbers.length; i++) {
         out[numbers[i]] = spans[i];
       }

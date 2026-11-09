@@ -518,3 +518,16 @@ pub fn push_branch(path: String, name: String) -> Result<String, String> {
 pub fn git_push_force(path: String) -> Result<String, String> {
     cgit_core::git_push_force(path)
 }
+
+
+pub fn prepare_patch_import(path: String, patch: String) -> Result<String, String> {
+    cgit_core::prepare_patch_import(path, patch)
+}
+
+pub fn finish_patch_import(path: String, token: String, resolutions: String) -> Result<(), String> {
+    cgit_core::finish_patch_import(path, token, resolutions)
+}
+
+pub fn discard_patch_import(token: String) -> Result<(), String> {
+    cgit_core::discard_patch_import(token)
+}

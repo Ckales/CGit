@@ -776,3 +776,329 @@ String patchFileName(String summary, {int maxLength = 50}) {
       : String.fromCharCodes(runes.sublist(0, maxLength));
   return '0001-$slug.patch';
 }
+
+/* ---------- imported patch text ---------- */
+
+/// One file's complete diff text extracted from an imported patch.
+class ImportPatchFile {
+  const ImportPatchFile({
+    required this.path,
+    required this.patch,
+    required this.status,
+    String? targetPath,
+  }) : _targetPath = targetPath;
+
+  final String path;
+  final String patch;
+  final String status;
+  final String? _targetPath;
+
+  /// The resulting file path, useful for matching conflicts or destination
+  /// files. For a rename, [path] also shows both names for display.
+  String get targetPath => _targetPath ?? path;
+}
+
+/// Splits a Git patch into per-file diffs. A format-patch mail envelope and
+/// its trailing signature are not part of the returned per-file patch text.
+/// The file diff itself is kept verbatim, including mode, binary, and newline
+/// records. This only parses text; it does not apply the patch or touch Git.
+List<ImportPatchFile> splitImportPatch(String text) {
+  final lines = _PatchLines(text);
+  final gitHeaders = <int>[];
+  for (var i = 0; i < lines.values.length; i++) {
+    if (lines.values[i].content.startsWith('diff --git ')) {
+      gitHeaders.add(i);
+    }
+  }
+
+  if (gitHeaders.isNotEmpty) {
+    final end = _withoutFormatPatchSignature(lines);
+    return [
+      for (var i = 0; i < gitHeaders.length; i++)
+        if (gitHeaders[i] < end)
+          _gitPatchFile(
+            lines,
+            gitHeaders[i],
+            i + 1 < gitHeaders.length ? gitHeaders[i + 1] : end,
+          ),
+    ];
+  }
+
+  final unified = _splitUnifiedPatch(lines);
+  if (unified.isNotEmpty) return unified;
+  throw const FormatException('无法识别补丁格式：未找到 Git diff 或 unified diff 文件头');
+}
+
+class _PatchLine {
+  const _PatchLine(this.content, this.raw);
+  final String content;
+  final String raw;
+}
+
+class _PatchLines {
+  _PatchLines(String text) {
+    var start = 0;
+    for (var i = 0; i < text.length; i++) {
+      if (text.codeUnitAt(i) == 10) {
+        final hasCr = i > start && text.codeUnitAt(i - 1) == 13;
+        final contentEnd = hasCr ? i - 1 : i;
+        values.add(_PatchLine(
+          text.substring(start, contentEnd),
+          text.substring(start, i + 1),
+        ));
+        start = i + 1;
+      }
+    }
+    if (start < text.length) {
+      values.add(_PatchLine(text.substring(start), text.substring(start)));
+    }
+  }
+
+  final values = <_PatchLine>[];
+}
+
+int _withoutFormatPatchSignature(_PatchLines lines) {
+  for (var i = lines.values.length - 2; i >= 0; i--) {
+    if (lines.values[i].content == '-- ' &&
+        lines.values[i + 1].content.isNotEmpty &&
+        RegExp(r'^\d+(?:\.\d+)*').hasMatch(lines.values[i + 1].content)) {
+      return i;
+    }
+  }
+  return lines.values.length;
+}
+
+ImportPatchFile _gitPatchFile(_PatchLines lines, int start, int end) {
+  final header = lines.values[start].content.substring('diff --git '.length);
+  final pair = _parseGitPathPair(header);
+  var oldPath = _stripDiffPrefix(pair.$1, 'a/');
+  var newPath = _stripDiffPrefix(pair.$2, 'b/');
+  var renamed = false;
+  var added = false;
+  var deleted = false;
+  var inHunk = false;
+
+  for (var i = start + 1; i < end; i++) {
+    final line = lines.values[i].content;
+    if (line.startsWith('@@ ')) inHunk = true;
+    if (inHunk) continue;
+    if (line.startsWith('rename from ')) {
+      oldPath = _decodeGitLabel(line.substring('rename from '.length));
+      renamed = true;
+    } else if (line.startsWith('rename to ')) {
+      newPath = _decodeGitLabel(line.substring('rename to '.length));
+      renamed = true;
+    } else if (line == 'deleted file mode' ||
+        line.startsWith('deleted file mode ')) {
+      deleted = true;
+    } else if (line == 'new file mode' || line.startsWith('new file mode ')) {
+      added = true;
+    } else if (line.startsWith('--- ')) {
+      oldPath = _stripDiffPrefix(_decodeGitPath(line.substring(4)), 'a/');
+      if (oldPath == '/dev/null') added = true;
+    } else if (line.startsWith('+++ ')) {
+      newPath = _stripDiffPrefix(_decodeGitPath(line.substring(4)), 'b/');
+      if (newPath == '/dev/null') deleted = true;
+    }
+  }
+
+  final status = renamed
+      ? 'renamed'
+      : added || oldPath == '/dev/null'
+          ? 'added'
+          : deleted || newPath == '/dev/null'
+              ? 'deleted'
+              : 'modified';
+  final path = renamed
+      ? '$oldPath → $newPath'
+      : status == 'deleted'
+          ? oldPath
+          : newPath;
+  return ImportPatchFile(
+    path: path,
+    patch: lines.values.sublist(start, end).map((line) => line.raw).join(),
+    status: status,
+    targetPath: newPath,
+  );
+}
+
+(String, String) _parseGitPathPair(String value) {
+  final first = _readGitPath(value, 0);
+  final secondStart = _skipSpaces(value, first.$2);
+  final second = _readGitPath(value, secondStart);
+  if (first.$1.isEmpty || second.$1.isEmpty ||
+      value.substring(second.$2).trim().isNotEmpty) {
+    throw const FormatException('无法识别补丁格式：Git diff 文件路径格式无效');
+  }
+  return (first.$1, second.$1);
+}
+
+(String, int) _readGitPath(String value, int offset) {
+  if (offset >= value.length) return ('', offset);
+  if (value.codeUnitAt(offset) != 34) {
+    var end = value.indexOf(' ', offset);
+    if (end < 0) end = value.length;
+    return (value.substring(offset, end), end);
+  }
+
+  final bytes = <int>[];
+  var i = offset + 1;
+  while (i < value.length && value.codeUnitAt(i) != 34) {
+    final code = value.codeUnitAt(i++);
+    if (code != 92) {
+      _appendUtf8(bytes, code);
+      continue;
+    }
+    if (i >= value.length) break;
+    final escaped = value.codeUnitAt(i++);
+    const simple = <int, int>{
+      34: 34,
+      92: 92,
+      110: 10,
+      114: 13,
+      116: 9,
+      98: 8,
+      102: 12,
+      118: 11,
+    };
+    if (simple.containsKey(escaped)) {
+      bytes.add(simple[escaped]!);
+    } else if (escaped >= 48 && escaped <= 55) {
+      var octal = escaped - 48;
+      var count = 1;
+      while (count < 3 && i < value.length) {
+        final digit = value.codeUnitAt(i);
+        if (digit < 48 || digit > 55) break;
+        octal = octal * 8 + digit - 48;
+        i++;
+        count++;
+      }
+      bytes.add(octal & 255);
+    } else {
+      bytes.add(escaped);
+    }
+  }
+  if (i >= value.length || value.codeUnitAt(i) != 34) {
+    throw const FormatException('无法识别补丁格式：Git diff 引号路径未闭合');
+  }
+  return (_decodeUtf8(bytes), i + 1);
+}
+
+void _appendUtf8(List<int> bytes, int rune) {
+  if (rune <= 0x7f) {
+    bytes.add(rune);
+  } else if (rune <= 0x7ff) {
+    bytes
+      ..add(0xc0 | (rune >> 6))
+      ..add(0x80 | (rune & 0x3f));
+  } else if (rune <= 0xffff) {
+    bytes
+      ..add(0xe0 | (rune >> 12))
+      ..add(0x80 | ((rune >> 6) & 0x3f))
+      ..add(0x80 | (rune & 0x3f));
+  } else {
+    bytes
+      ..add(0xf0 | (rune >> 18))
+      ..add(0x80 | ((rune >> 12) & 0x3f))
+      ..add(0x80 | ((rune >> 6) & 0x3f))
+      ..add(0x80 | (rune & 0x3f));
+  }
+}
+
+String _decodeUtf8(List<int> bytes) {
+  final runes = <int>[];
+  for (var i = 0; i < bytes.length;) {
+    final first = bytes[i++];
+    if (first < 0x80) {
+      runes.add(first);
+      continue;
+    }
+    final count = first >= 0xf0
+        ? 3
+        : first >= 0xe0
+            ? 2
+            : first >= 0xc2
+                ? 1
+                : 0;
+    if (count == 0 || i + count > bytes.length) {
+      runes.add(0xfffd);
+      continue;
+    }
+    var rune = first & (count == 1 ? 0x1f : count == 2 ? 0x0f : 0x07);
+    var valid = true;
+    for (var j = 0; j < count; j++) {
+      final next = bytes[i++];
+      if ((next & 0xc0) != 0x80) {
+        valid = false;
+        i--;
+        break;
+      }
+      rune = (rune << 6) | (next & 0x3f);
+    }
+    if (!valid || rune > 0x10ffff || (rune >= 0xd800 && rune <= 0xdfff)) {
+      runes.add(0xfffd);
+    } else {
+      runes.add(rune);
+    }
+  }
+  return String.fromCharCodes(runes);
+}
+
+int _skipSpaces(String value, int offset) {
+  var i = offset;
+  while (i < value.length && value.codeUnitAt(i) == 32) {
+    i++;
+  }
+  return i;
+}
+
+String _decodeGitPath(String value) => _readGitPath(value, 0).$1;
+
+String _decodeGitLabel(String value) => value.startsWith('"')
+    ? _decodeGitPath(value)
+    : value;
+
+String _stripDiffPrefix(String path, String prefix) =>
+    path.startsWith(prefix) ? path.substring(prefix.length) : path;
+
+List<ImportPatchFile> _splitUnifiedPatch(_PatchLines lines) {
+  final starts = <int>[];
+  for (var i = 0; i + 2 < lines.values.length; i++) {
+    final oldLine = lines.values[i].content;
+    final newLine = lines.values[i + 1].content;
+    if (oldLine.startsWith('--- ') &&
+        newLine.startsWith('+++ ') &&
+        lines.values[i + 2].content.startsWith('@@ ')) {
+      starts.add(i);
+    }
+  }
+  if (starts.isEmpty) return const [];
+
+  return [
+    for (var i = 0; i < starts.length; i++)
+      _unifiedPatchFile(
+        lines,
+        starts[i],
+        i + 1 < starts.length ? starts[i + 1] : lines.values.length,
+      ),
+  ];
+}
+
+ImportPatchFile _unifiedPatchFile(_PatchLines lines, int start, int end) {
+  final oldPath = _stripDiffPrefix(
+    _decodeGitPath(lines.values[start].content.substring(4)),
+    'a/',
+  );
+  final newPath = _stripDiffPrefix(
+    _decodeGitPath(lines.values[start + 1].content.substring(4)),
+    'b/',
+  );
+  final added = oldPath == '/dev/null';
+  final deleted = newPath == '/dev/null';
+  return ImportPatchFile(
+    path: deleted ? oldPath : newPath,
+    patch: lines.values.sublist(start, end).map((line) => line.raw).join(),
+    status: added ? 'added' : deleted ? 'deleted' : 'modified',
+    targetPath: deleted ? oldPath : newPath,
+  );
+}

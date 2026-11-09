@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'git_text.dart';
 import 'diff_syntax.dart';
 import 'theme.dart';
+import 'syntax_theme.dart';
 
 enum DiffMode { split, unified }
 
@@ -140,7 +141,7 @@ class _HunkViewState extends State<_HunkView> {
   /// The key for a row, when that row starts a run of changed lines.
   GlobalKey? _blockKey(int row) => widget.blockKeys['${widget.index}:$row'];
 
-  (String, String, Palette)? _syntaxKey;
+  (String, String, Palette, SyntaxTheme)? _syntaxKey;
   late DiffSyntax _syntax;
 
   final _picked = <int>{};
@@ -197,9 +198,10 @@ class _HunkViewState extends State<_HunkView> {
   @override
   Widget build(BuildContext context) {
     final palette = Theming.of(context);
-    final syntaxKey = (widget.hunk, widget.file, palette);
+    final theme = Theming.syntaxOf(context);
+    final syntaxKey = (widget.hunk, widget.file, palette, theme);
     if (_syntaxKey != syntaxKey) {
-      _syntax = DiffSyntax(widget.hunk, widget.file, palette);
+      _syntax = DiffSyntax(widget.hunk, widget.file, palette, theme: theme);
       _syntaxKey = syntaxKey;
     }
     final interactive = widget.onApply != null;

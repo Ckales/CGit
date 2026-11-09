@@ -20,6 +20,7 @@ Future<T?> showAppDialog<T>(
   double maxWidth = 520,
 }) {
   final p = Theming.of(context);
+  final syntaxTheme = Theming.syntaxOf(context);
   return showDialog<T>(
     context: context,
     barrierColor: const Color(0x66000000),
@@ -27,6 +28,7 @@ Future<T?> showAppDialog<T>(
     // the palette is handed across for the badge, buttons and field.
     builder: (context) => Theming(
       palette: p,
+      syntaxTheme: syntaxTheme,
       child: Dialog(
         backgroundColor: Colors.transparent,
         elevation: 0,

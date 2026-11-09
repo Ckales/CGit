@@ -1,5 +1,7 @@
 import 'package:flutter/widgets.dart';
 
+import 'syntax_theme.dart';
+
 /// The app palette. The values are plain constants and switching theme is an
 /// InheritedWidget rebuild.
 class Palette {
@@ -63,14 +65,23 @@ class Palette {
 }
 
 class Theming extends InheritedWidget {
-  const Theming({super.key, required this.palette, required super.child});
+  const Theming(
+      {super.key,
+      required this.palette,
+      this.syntaxTheme = SyntaxTheme.atomOne,
+      required super.child});
   final Palette palette;
+  final SyntaxTheme syntaxTheme;
 
   static Palette of(BuildContext context) =>
       context.dependOnInheritedWidgetOfExactType<Theming>()!.palette;
 
+  static SyntaxTheme syntaxOf(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<Theming>()!.syntaxTheme;
+
   @override
-  bool updateShouldNotify(Theming old) => old.palette != palette;
+  bool updateShouldNotify(Theming old) =>
+      old.palette != palette || old.syntaxTheme != syntaxTheme;
 }
 
 /// The one monospace style the diff is built from.

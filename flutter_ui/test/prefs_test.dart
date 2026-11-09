@@ -1,4 +1,5 @@
 import 'package:cgit_flutter/prefs.dart';
+import 'package:cgit_flutter/syntax_theme.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -12,6 +13,7 @@ void main() {
     test('dark theme and split diff', () async {
       final prefs = await Prefs.load();
       expect(prefs.isDark, isTrue);
+      expect(prefs.syntaxTheme, SyntaxTheme.atomOne);
       expect(prefs.isSplitDiff, isTrue);
       expect(prefs.historyPageSize, 100);
       expect(prefs.pullStrategy, 'ff-only');

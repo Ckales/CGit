@@ -18,6 +18,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
 
+pub mod patch_import;
+pub use patch_import::{discard_patch_import, finish_patch_import, prepare_patch_import};
+
 /// Holds the active file-system watcher so it stays alive for the open repo.
 /// Replacing it (on opening another repo) drops the previous watcher.
 pub struct WatchState(pub Mutex<Option<notify::RecommendedWatcher>>);

@@ -18,6 +18,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
 
+#[cfg(target_os = "macos")]
+mod git_environment;
+
 pub mod patch_import;
 pub use patch_import::{discard_patch_import, finish_patch_import, prepare_patch_import};
 
@@ -2669,6 +2672,8 @@ fn clip(text: &str) -> String {
 /// 用户名 / 密码就会永远等下去；关掉后它会直接报凭证错误，界面才拿得到结果。
 fn git_cmd() -> Command {
     let mut cmd = Command::new("git");
+    #[cfg(target_os = "macos")]
+    git_environment::apply(&mut cmd);
     cmd.env("GIT_TERMINAL_PROMPT", "0");
     no_console(&mut cmd);
     cmd
@@ -2849,6 +2854,76 @@ pub fn git_push_force(path: String) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn git_helpers_are_found_from_gui_environment() {
+        use std::os::unix::fs::PermissionsExt;
+
+        const CHILD_PATH: &str = "CGIT_TEST_HELPER_PATH";
+        if std::env::var_os(CHILD_PATH).is_some() {
+            let result = run_git("/", &["ls-remote", "cgit-path-test::fixture", "HEAD"]);
+            assert_eq!(
+                result.unwrap(),
+                "1111111111111111111111111111111111111111\tHEAD\n"
+            );
+            let credentials = run_git_stdin(
+                "/",
+                &["-c", "credential.helper=cgit-path-test", "credential", "fill"],
+                "protocol=https\nhost=example.invalid\n\n",
+            )
+            .unwrap();
+            assert!(credentials.contains("username=fixture-user\n"));
+            assert!(credentials.contains("password=fixture-password\n"));
+            return;
+        }
+
+        let root = std::env::temp_dir().join(format!("cgit-helper-path-{}", temp_token()));
+        let helper_dir = root.join("custom tools/bin");
+        std::fs::create_dir_all(&helper_dir).unwrap();
+        let helper = helper_dir.join("git-remote-cgit-path-test");
+        std::fs::write(
+            &helper,
+            "#!/bin/sh\nwhile IFS= read -r command; do\ncase \"$command\" in\ncapabilities) printf '\\n' ;;\nlist*) printf '1111111111111111111111111111111111111111 HEAD\\n\\n' ;;\nesac\ndone\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let credential_helper = helper_dir.join("git-credential-cgit-path-test");
+        std::fs::write(
+            &credential_helper,
+            "#!/bin/sh\nwhile IFS= read -r line; do\n[ -z \"$line\" ] && break\ndone\nprintf 'username=fixture-user\\npassword=fixture-password\\n'\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&credential_helper, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let shell = root.join("login-shell");
+        std::fs::write(
+            &shell,
+            "#!/bin/sh\nprintf 'shell startup output\\n\\000CGIT_PATH\\000%s\\n\\000' \"$CGIT_TEST_HELPER_PATH\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&shell, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "tests::git_helpers_are_found_from_gui_environment",
+                "--nocapture",
+            ])
+            .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+            .env("SHELL", shell)
+            .env(CHILD_PATH, helper_dir)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .output()
+            .unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+        assert!(
+            output.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 
     const PATCH: &str = "diff --git a/f b/f\nindex 111..222 100644\n--- a/f\n+++ b/f\n@@ -1,2 +1,3 @@\n a\n+b\n c\n@@ -10,1 +11,1 @@\n-old\n+new\n";
 

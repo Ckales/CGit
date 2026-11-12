@@ -570,10 +570,16 @@ fn preview_files(
         } else {
             None
         };
+        let base_bytes = if let Some(path_stages) = conflict_stages {
+            stage_content(session, env, path_stages.get(&1))?
+        } else {
+            None
+        };
         let binary = session.binary_paths.contains(&relative)
             || content_bytes.as_deref().is_some_and(is_binary)
             || ours_bytes.as_deref().is_some_and(is_binary)
-            || theirs_bytes.as_deref().is_some_and(is_binary);
+            || theirs_bytes.as_deref().is_some_and(is_binary)
+            || base_bytes.as_deref().is_some_and(is_binary);
         let content = if binary {
             String::new()
         } else {
@@ -601,12 +607,18 @@ fn preview_files(
                 .transpose()?
                 .unwrap_or_default()
         };
+        let base = if binary {
+            None
+        } else {
+            base_bytes.as_deref().map(decode_text).transpose()?
+        };
         files.push(json!({
             "path": relative.to_string_lossy(),
             "conflict": conflict,
             "content": content,
             "ours": ours,
             "theirs": theirs,
+            "base": base,
             "binary": binary,
             "deleted": !index_paths.contains(&relative),
         }));
@@ -1430,6 +1442,7 @@ mod tests {
         assert_eq!(preview["files"][0]["conflict"], true);
         assert_eq!(preview["files"][0]["ours"], "ours\n");
         assert_eq!(preview["files"][0]["theirs"], "theirs\n");
+        assert_eq!(preview["files"][0]["base"], "base\n");
         let resolutions = serde_json::json!({"f": {"content": "merged\n"}}).to_string();
         finish_patch_import(
             dir.to_string_lossy().into_owned(),
@@ -1440,6 +1453,110 @@ mod tests {
 
         assert_eq!(std::fs::read_to_string(dir.join("f")).unwrap(), "merged\n");
         assert_eq!(std::fs::read(dir.join(".git/index")).unwrap(), real_index);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn three_way_conflict_preserves_an_empty_base_blob() {
+        let dir = repo();
+        commit_file(&dir, "f", "");
+        let base = git(&dir, &["hash-object", "f"]);
+        std::fs::write(dir.join("incoming"), "theirs\n").unwrap();
+        let target = git(&dir, &["hash-object", "-w", "incoming"]);
+        std::fs::write(dir.join("f"), "ours\n").unwrap();
+        let patch = format!(
+            "diff --git a/f b/f\nindex {base}..{target} 100644\n--- a/f\n+++ b/f\n@@ -0,0 +1 @@\n+theirs\n"
+        );
+
+        let preview: Value = serde_json::from_str(
+            &prepare_patch_import(dir.to_string_lossy().into_owned(), patch).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(preview["files"][0]["conflict"], true);
+        assert_eq!(preview["files"][0]["base"], "");
+
+        discard_patch_import(preview["token"].as_str().unwrap().to_owned()).unwrap();
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn add_add_conflict_has_no_base_stage() {
+        let dir = repo();
+        std::fs::write(dir.join("f"), "ours\n").unwrap();
+        std::fs::write(dir.join("incoming"), "theirs\n").unwrap();
+        let target = git(&dir, &["hash-object", "-w", "incoming"]);
+        let patch = format!(
+            "diff --git a/f b/f\nnew file mode 100644\nindex 0000000..{target}\n--- /dev/null\n+++ b/f\n@@ -0,0 +1 @@\n+theirs\n"
+        );
+
+        let preview: Value = serde_json::from_str(
+            &prepare_patch_import(dir.to_string_lossy().into_owned(), patch).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(preview["files"][0]["conflict"], true);
+        assert!(preview["files"][0]["base"].is_null());
+
+        discard_patch_import(preview["token"].as_str().unwrap().to_owned()).unwrap();
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn binary_base_is_detected_without_decoding_it() {
+        let dir = repo();
+        commit_file(&dir, "f", "");
+        std::fs::write(dir.join("base"), b"base\0binary").unwrap();
+        std::fs::write(dir.join("ours"), b"ours\n").unwrap();
+        std::fs::write(dir.join("theirs"), b"theirs\n").unwrap();
+        let base = git(&dir, &["hash-object", "-w", "base"]);
+        let ours = git(&dir, &["hash-object", "-w", "ours"]);
+        let theirs = git(&dir, &["hash-object", "-w", "theirs"]);
+
+        let temp_dir = TempDir::create().unwrap();
+        let temp_worktree = temp_dir.path().join("worktree");
+        let temp_objects = temp_dir.path().join("objects");
+        let temp_lfs = temp_dir.path().join("lfs");
+        std::fs::create_dir(&temp_worktree).unwrap();
+        std::fs::create_dir(&temp_objects).unwrap();
+        std::fs::create_dir(&temp_lfs).unwrap();
+        std::fs::write(temp_worktree.join("f"), b"content\n").unwrap();
+        let git_dir = PathBuf::from(git(&dir, &["rev-parse", "--absolute-git-dir"]));
+        let real_index = git_dir.join("index");
+        let real_objects = git_dir.join("objects");
+        let temp_index = temp_dir.path().join("index");
+        let session = PatchImportSession {
+            root: dir.clone(),
+            git_dir: git_dir.clone(),
+            common_dir: git_dir,
+            real_index,
+            real_objects,
+            _temp_dir: temp_dir,
+            temp_worktree,
+            temp_index,
+            temp_objects,
+            temp_lfs,
+            index_snapshot: None,
+            head_snapshot: None,
+            worktree_snapshots: Vec::new(),
+            touched_paths: vec![PathBuf::from("f")],
+            binary_paths: HashSet::new(),
+            conflict_paths: vec![PathBuf::from("f")],
+        };
+        let env = session.env(session.temp_worktree.clone());
+        ensure_git_success(
+            &run_git(&session.root, &["read-tree", "--empty"], Some(&env)).unwrap(),
+            "初始化测试索引失败",
+        )
+        .unwrap();
+        let stages = HashMap::from([(
+            PathBuf::from("f"),
+            HashMap::from([(1, base), (2, ours), (3, theirs)]),
+        )]);
+
+        let files = preview_files(&session, &env, &stages).unwrap();
+        assert_eq!(files[0]["binary"], true);
+        assert!(files[0]["base"].is_null());
+        assert_eq!(files[0]["ours"], "");
+        assert_eq!(files[0]["theirs"], "");
         let _ = std::fs::remove_dir_all(dir);
     }
 

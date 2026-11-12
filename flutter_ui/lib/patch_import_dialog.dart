@@ -8,11 +8,12 @@ import 'theme.dart';
 
 class PatchImportConflict {
   const PatchImportConflict({required this.path, required this.content,
-    required this.ours, required this.theirs, this.binary = false});
+    required this.ours, required this.theirs, this.base, this.binary = false});
   final String path;
   final String content;
   final String ours;
   final String theirs;
+  final String? base;
   final bool binary;
 }
 
@@ -24,6 +25,7 @@ class PreparedPatch {
       if (f['conflict'] == true) PatchImportConflict(
         path: f['path'] as String, content: f['content'] as String? ?? '',
         ours: f['ours'] as String? ?? '', theirs: f['theirs'] as String? ?? '',
+        base: f['base'] as String?,
         binary: f['binary'] == true,
       ),
     ],
@@ -171,11 +173,13 @@ class _PatchImportDialogState extends State<PatchImportDialog> {
             if (_editing != null && !_editing!.binary) MergeWindow(
               key: ValueKey(_editing!.path), file: _editing!.path,
               content: _resolved[_editing!.path]?['content'] ?? _editing!.content,
+              base: _resolved[_editing!.path] == null ? _editing!.base : null,
+              ours: _resolved[_editing!.path] == null ? _editing!.ours : null,
+              theirs: _resolved[_editing!.path] == null ? _editing!.theirs : null,
               patchImport: true,
               onClose: () => setState(() => _editing = null),
               onResolveWith: _saveResolution,
               onResolveSide: _saveSide,
-              onToggleBase: (_) async {},
             ),
             if (_editing?.binary == true) Positioned.fill(child: ColoredBox(
               color: const Color(0x99000000), child: Center(child: Container(

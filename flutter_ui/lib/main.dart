@@ -321,9 +321,14 @@ class _RepoScreenState extends State<RepoScreen> {
   Future<void>? _networkDone;
   int _workspaceOpen = 0;
 
-  /// The file open in the merge window, and its worktree text.
+  /// The file open in the merge window, its worktree text, and — when the
+  /// index stages are readable — the real base/ours/theirs versions.
   String? _mergeFile;
   String _mergeContent = '';
+  String? _mergeBase;
+  String? _mergeOurs;
+  String? _mergeTheirs;
+  String? _mergeSource;
 
   /// The in-progress interactive rebase plan, and the base it rewrites onto.
   RebasePlan? _rebasePlan;
@@ -1774,9 +1779,20 @@ class _RepoScreenState extends State<RepoScreen> {
         }
         return;
       }
+      // A marker-free worktree already contains the user's merge result.
+      // Keep it for explicit resolution instead of rebuilding from the index.
+      final versions = parseConflicts(content).hasConflict
+          ? await git.conflictVersions(file)
+          : null;
+      final source = await git.mergeSource();
+      if (!mounted || git != _git || !conflicts.contains(file)) return;
       setState(() {
         _mergeFile = file;
         _mergeContent = content;
+        _mergeBase = versions?.base;
+        _mergeOurs = versions?.ours;
+        _mergeTheirs = versions?.theirs;
+        _mergeSource = source;
       });
     } on GitError catch (e) {
       await _refreshLight();
@@ -1784,13 +1800,21 @@ class _RepoScreenState extends State<RepoScreen> {
     }
   }
 
+  void _closeMerge() => setState(() {
+        _mergeFile = null;
+        _mergeBase = null;
+        _mergeOurs = null;
+        _mergeTheirs = null;
+        _mergeSource = null;
+      });
+
   Future<void> _resolveWith(String content) async {
     final git = _git;
     final file = _mergeFile;
     if (git == null || file == null) return;
     try {
       await git.resolveWith(file, content);
-      if (mounted) setState(() => _mergeFile = null);
+      if (mounted) _closeMerge();
       await _refresh();
       if (mounted) setState(() => _status = '已解决 $file');
     } on GitError catch (e) {
@@ -1804,36 +1828,11 @@ class _RepoScreenState extends State<RepoScreen> {
     if (git == null || file == null) return;
     try {
       await git.resolveSide(file, side);
-      if (mounted) setState(() => _mergeFile = null);
+      if (mounted) _closeMerge();
       await _refresh();
       if (mounted) {
         setState(() => _status = '已采用${side == 'ours' ? '我方' : '对方'} — $file');
       }
-    } on GitError catch (e) {
-      if (mounted) _fail(e.message);
-    }
-  }
-
-  /// Per-block base text only exists in diff3-style markers, so getting it means
-  /// asking git to regenerate the file — which throws away manual edits to it.
-  /// Hence the confirmation before, and the re-read after.
-  Future<void> _toggleBase(bool wantBase) async {
-    final git = _git;
-    final file = _mergeFile;
-    if (git == null || file == null) return;
-
-    final ok = await _confirm(
-      title: wantBase ? '显示共同祖先' : '隐藏共同祖先',
-      body: '将重新生成 "$file" 的冲突标记'
-          '${wantBase ? '（加入 base 段）' : '（移除 base 段）'}。'
-          '该文件上的手工修改会丢失，已选择的取舍也会重置。继续？',
-    );
-    if (!ok) return;
-
-    try {
-      await git.setConflictStyle(file, wantBase ? 'diff3' : 'merge');
-      final content = await git.readFile(file);
-      if (mounted) setState(() => _mergeContent = content);
     } on GitError catch (e) {
       if (mounted) _fail(e.message);
     }
@@ -1959,7 +1958,7 @@ class _RepoScreenState extends State<RepoScreen> {
           } else if (_rebasePlan != null) {
             setState(() => _rebasePlan = null);
           } else if (_mergeFile != null) {
-            setState(() => _mergeFile = null);
+            _closeMerge();
           } else if (_showExpandedDiff) {
             setState(() => _diffExpanded = false);
           } else if (_commitOpen) {
@@ -2042,10 +2041,14 @@ class _RepoScreenState extends State<RepoScreen> {
                   MergeWindow(
                     file: _mergeFile!,
                     content: _mergeContent,
-                    onClose: () => setState(() => _mergeFile = null),
+                    base: _mergeBase,
+                    ours: _mergeOurs,
+                    theirs: _mergeTheirs,
+                    oursLabel: _branch.isEmpty ? null : _branch,
+                    theirsLabel: _mergeSource,
+                    onClose: _closeMerge,
                     onResolveWith: _resolveWith,
                     onResolveSide: _resolveSide,
-                    onToggleBase: _toggleBase,
                   ),
               ],
             ),

@@ -160,8 +160,14 @@ class PairedHunk {
 ///
 /// A run of `-` lines is paired positionally against the run of `+` lines that
 /// follows it, which is what makes an edited line show up as one row with both
-/// versions instead of two unrelated rows. Leftovers get an empty cell on the
-/// other side, and a side's line number only advances when that side has a line.
+/// versions instead of two unrelated rows. A side's line number only advances
+/// when that side has a line.
+///
+/// Pure deletions are not padded with an empty cell on the new side. That gap
+/// is what made a removal look like an insertion (a full-height blank) or like
+/// a hatch floating next to the surviving code. [deletionFragments] turns the
+/// same run into one polygon on the divider, the way the side-by-side viewer
+/// draws a deleted fragment.
 ///
 /// `picks` carries the original body indices, so [buildPartialHunk] can stage
 /// exactly the rows the user selected.
@@ -223,6 +229,15 @@ PairedHunk? pairHunkLines(String hunk) {
     for (var k = 0; k < n; k++) {
       final d = k < dels.length ? dels[k] : null;
       final a = k < adds.length ? adds[k] : null;
+      // A deletion with nothing inserted in the whole run is not a row.
+      // Emitting one would pad the new side with a blank the height of the
+      // removed code, which is the "this looks added" reading. A leftover
+      // inside a modification (more `-` than `+`) still needs its row so the
+      // two versions stay aligned; only the pure run is a fragment.
+      if (d != null && a == null && adds.isEmpty) {
+        oldNo++;
+        continue;
+      }
       final picks = <int>[];
       if (d != null) picks.add(d.idx);
       if (a != null) picks.add(a.idx);
@@ -237,6 +252,83 @@ PairedHunk? pairHunkLines(String hunk) {
     }
   }
   return PairedHunk(head, rows);
+}
+
+/// One removed run, drawn on the divider between the two panes.
+///
+/// [before] is the number of paired rows above the run, so the polygon's left
+/// edge starts there. [lines] is how many old lines were removed. The right
+/// edge collapses to a point on the boundary after [before]: the new file has
+/// no lines there. That is the JetBrains deleted fragment — a gray trapezoid
+/// in the stripe, not a blank row and not a hatch beside the surviving code.
+class DeletionFragment {
+  const DeletionFragment(this.before, this.lines, this.picks);
+  final int before;
+  final int lines;
+
+  /// Body indices of the `-` lines, so clicking the fragment stages the deletion.
+  final List<int> picks;
+}
+
+/// Removed runs that [pairHunkLines] deliberately does not turn into rows.
+///
+/// A deletion that sits inside a modification (more `-` than `+`) is not one of
+/// these: that leftover still needs a row so the two versions stay aligned.
+/// Only a run with no following `+` lines is a fragment.
+List<DeletionFragment> deletionFragments(String hunk) {
+  final lines = hunk.replaceFirst(RegExp(r'\n$'), '').split('\n');
+  if (parseHunkHeader(lines[0]) == null) return const [];
+  final body = lines.sublist(1);
+
+  final out = <DeletionFragment>[];
+  var i = 0;
+  var before = 0;
+
+  void skipMarkers() {
+    while (i < body.length && body[i].startsWith('\\')) {
+      i++;
+    }
+  }
+
+  while (i < body.length) {
+    if (body[i].startsWith('\\')) {
+      i++;
+      continue;
+    }
+    if (!body[i].startsWith('+') && !body[i].startsWith('-')) {
+      before++;
+      i++;
+      continue;
+    }
+
+    final start = i;
+    final dels = <int>[];
+    while (i < body.length && body[i].startsWith('-')) {
+      dels.add(i);
+      i++;
+    }
+    skipMarkers();
+    var adds = 0;
+    while (i < body.length && body[i].startsWith('+')) {
+      adds++;
+      i++;
+    }
+    skipMarkers();
+    if (i == start) {
+      i++;
+      continue;
+    }
+
+    final paired = dels.length < adds ? dels.length : adds;
+    if (adds == 0 && dels.isNotEmpty) {
+      out.add(DeletionFragment(before, dels.length, dels));
+    }
+    // Rows emitted for this change: the paired lines, plus an addition row for
+    // every extra `+`. Extra `-` lines stay as rows (see pairHunkLines) so they
+    // are not fragments.
+    before += paired + (adds - paired);
+  }
+  return out;
 }
 
 class LinePart {
@@ -398,44 +490,7 @@ class ConflictBlock {
   /// only this and [edited].
   String? resolution;
 
-  /// The merge window's per-side decision: null undecided, true merged into the
-  /// result, false dropped. Two independent tri-states rather than one radio
-  /// choice, because "take both" is a real outcome and "I have looked at this
-  /// side and rejected it" is different from "I have not looked yet".
-  /// [syncResolution] collapses the pair into [resolution].
-  bool? takeOurs;
-  bool? takeTheirs;
-
-  /// A block the user has finished with: either typed over, or decided on both
-  /// sides. The merge window refuses to save while any conflict is undecided.
-  bool get decided =>
-      edited != null || (takeOurs != null && takeTheirs != null);
-
-  /// The result lines implied by the two side decisions, before any hand edit.
-  List<String> get resultLines => [
-        if (takeOurs == true) ...ours,
-        if (takeTheirs == true) ...theirs,
-      ];
-
-  /// Fold the two side decisions into the single resolution assembleConflict
-  /// understands. Both sides dropped is 'none'; anything still undecided leaves
-  /// it null, which assembles as "ours" — the same default git leaves behind.
-  void syncResolution() {
-    if (takeOurs == true && takeTheirs == true) {
-      resolution = 'both';
-    } else if (takeOurs == true) {
-      resolution = 'ours';
-    } else if (takeTheirs == true) {
-      resolution = 'theirs';
-    } else if (takeOurs == false && takeTheirs == false) {
-      resolution = 'none';
-    } else {
-      resolution = null;
-    }
-  }
-
-  /// Hand-edited replacement text. Wins over [resolution] — the merge window's
-  /// middle column is editable, for context blocks as well as conflicts.
+  /// Hand-edited replacement text. Wins over [resolution].
   String? edited;
 }
 
@@ -521,6 +576,320 @@ String assembleConflict(List<ConflictBlock> blocks) {
     }
   }
   return out.join('\n');
+}
+
+/* ---------- three-way line merge ---------- */
+
+enum MergeGroupKind { common, oursOnly, theirsOnly, bothSame, conflict }
+
+/// One aligned row inside a [MergeGroup]. A null cell means that side has no
+/// line here; source editors omit it and connectors link the actual ranges.
+class MergeRow {
+  const MergeRow({this.base, this.ours, this.theirs});
+  final String? base;
+  final String? ours;
+  final String? theirs;
+}
+
+/// A run of lines that changed on at least one side, with all three versions
+/// already line-aligned. Each source editor uses its own lines; group boundaries
+/// provide the anchors for linked scrolling when line counts differ.
+class MergeGroup {
+  const MergeGroup({
+    required this.kind,
+    required this.rows,
+    required this.baseLines,
+    required this.oursLines,
+    required this.theirsLines,
+  });
+
+  final MergeGroupKind kind;
+  final List<MergeRow> rows;
+  final List<String> baseLines;
+  final List<String> oursLines;
+  final List<String> theirsLines;
+
+  bool get isConflict => kind == MergeGroupKind.conflict;
+  bool get isChange => kind != MergeGroupKind.common;
+}
+
+class ThreeWayMerge {
+  const ThreeWayMerge(this.groups);
+  final List<MergeGroup> groups;
+  bool get hasConflict => groups.any((g) => g.isConflict);
+}
+
+List<String> _mergeLines(String text) =>
+    text.isEmpty ? const <String>[] : text.split('\n');
+
+bool _sameLines(List<String> a, List<String> b) {
+  if (identical(a, b)) return true;
+  if (a.length != b.length) return false;
+  for (var i = 0; i < a.length; i++) {
+    if (a[i] != b[i]) return false;
+  }
+  return true;
+}
+
+class _Change {
+  const _Change(this.baseStart, this.baseEnd, this.lines);
+  final int baseStart;
+  final int baseEnd;
+  final List<String> lines;
+}
+
+/// One row of the LCS length table for `a[aLo..aHi)` against `b[bLo..bHi)`.
+List<int> _lcsRow(
+    List<String> a, int aLo, int aHi, List<String> b, int bLo, int bHi) {
+  final m = bHi - bLo;
+  var prev = List<int>.filled(m + 1, 0);
+  var cur = List<int>.filled(m + 1, 0);
+  for (var i = aLo; i < aHi; i++) {
+    cur[0] = 0;
+    final ai = a[i];
+    for (var j = 0; j < m; j++) {
+      if (ai == b[bLo + j]) {
+        cur[j + 1] = prev[j] + 1;
+      } else {
+        cur[j + 1] = prev[j + 1] >= cur[j] ? prev[j + 1] : cur[j];
+      }
+    }
+    final swap = prev;
+    prev = cur;
+    cur = swap;
+  }
+  return prev;
+}
+
+/// Hirschberg's linear-space LCS: O(n*m) time, O(min(n,m)) memory, so a large
+/// conflicted file cannot blow up the heap just because it has two versions.
+void _lcsMatches(List<String> a, int aLo, int aHi, List<String> b, int bLo,
+    int bHi, List<(int, int)> out) {
+  if (aLo >= aHi || bLo >= bHi) return;
+  if (aHi - aLo == 1) {
+    for (var j = bLo; j < bHi; j++) {
+      if (a[aLo] == b[j]) {
+        out.add((aLo, j));
+        return;
+      }
+    }
+    return;
+  }
+  final aMid = (aLo + aHi) >> 1;
+  final left = _lcsRow(a, aLo, aMid, b, bLo, bHi);
+  final revA = [for (var i = aHi - 1; i >= aMid; i--) a[i]];
+  final revB = [for (var j = bHi - 1; j >= bLo; j--) b[j]];
+  final right = _lcsRow(revA, 0, revA.length, revB, 0, revB.length);
+  final m = bHi - bLo;
+  var bestK = 0;
+  var best = -1;
+  for (var k = 0; k <= m; k++) {
+    final score = left[k] + right[m - k];
+    if (score > best) {
+      best = score;
+      bestK = k;
+    }
+  }
+  _lcsMatches(a, aLo, aMid, b, bLo, bLo + bestK, out);
+  _lcsMatches(a, aMid, aHi, b, bLo + bestK, bHi, out);
+}
+
+const _lcsCellLimit = 20000000;
+
+/// The changed runs that turn [base] into [side], with their replacement lines.
+/// Common prefix and suffix are stripped first, so a small edit in a huge file
+/// stays cheap; only the changed middle goes through LCS.
+List<_Change> _changesFor(List<String> base, List<String> side) {
+  final minLen = base.length < side.length ? base.length : side.length;
+  var pre = 0;
+  while (pre < minLen && base[pre] == side[pre]) {
+    pre++;
+  }
+  var suf = 0;
+  while (suf < minLen - pre &&
+      base[base.length - 1 - suf] == side[side.length - 1 - suf]) {
+    suf++;
+  }
+  final aLo = pre, aHi = base.length - suf;
+  final bLo = pre, bHi = side.length - suf;
+  final aLen = aHi - aLo, bLen = bHi - bLo;
+  if (aLen == 0 && bLen == 0) return const [];
+  // A pathological middle (generated files) falls back to one replacement;
+  // that may over-report a conflict, but never writes the wrong content.
+  if (aLen == 0 || bLen == 0 || aLen * bLen > _lcsCellLimit) {
+    return [_Change(aLo, aHi, side.sublist(bLo, bHi))];
+  }
+
+  final matches = <(int, int)>[];
+  _lcsMatches(base, aLo, aHi, side, bLo, bHi, matches);
+  final out = <_Change>[];
+  var bi = aLo, si = bLo;
+  for (final m in matches) {
+    if (m.$1 > bi || m.$2 > si) {
+      out.add(_Change(bi, m.$1, side.sublist(si, m.$2)));
+    }
+    bi = m.$1 + 1;
+    si = m.$2 + 1;
+  }
+  if (bi < aHi || si < bHi) {
+    out.add(_Change(bi, aHi, side.sublist(si, bHi)));
+  }
+  return out;
+}
+
+/// 删除范围及其在删除后文件中的行边界，行号从 0 开始。
+List<({int first, int end, int sideLine})> deletedLineRanges(
+    List<String> before, List<String> after) {
+  final ranges = <({int first, int end, int sideLine})>[];
+  var delta = 0;
+  for (final change in _changesFor(before, after)) {
+    if (change.lines.isEmpty && change.baseEnd > change.baseStart) {
+      ranges.add((
+        first: change.baseStart,
+        end: change.baseEnd,
+        sideLine: change.baseStart + delta,
+      ));
+    }
+    delta += change.lines.length - (change.baseEnd - change.baseStart);
+  }
+  return ranges;
+}
+
+List<String> _applyChanges(
+    List<String> base, int start, int end, List<_Change> changes) {
+  final out = <String>[];
+  var at = start;
+  for (final c in changes) {
+    out.addAll(base.sublist(at, c.baseStart));
+    out.addAll(c.lines);
+    at = c.baseEnd;
+  }
+  out.addAll(base.sublist(at, end));
+  return out;
+}
+
+({Map<int, String?> cells, Map<int, List<String>> inserts}) _sideCells(
+    List<String> base, int start, int end, List<_Change> changes) {
+  final cells = <int, String?>{for (var i = start; i < end; i++) i: base[i]};
+  final inserts = <int, List<String>>{};
+  for (final c in changes) {
+    if (c.baseStart == c.baseEnd) {
+      (inserts[c.baseStart] ??= []).addAll(c.lines);
+      continue;
+    }
+    final cover = c.baseEnd - c.baseStart;
+    for (var k = 0; k < cover; k++) {
+      cells[c.baseStart + k] = k < c.lines.length ? c.lines[k] : null;
+    }
+    if (c.lines.length > cover) {
+      (inserts[c.baseEnd] ??= []).addAll(c.lines.sublist(cover));
+    }
+  }
+  return (cells: cells, inserts: inserts);
+}
+
+List<MergeRow> _alignedRows(List<String> base, int start, int end,
+    List<_Change> oursChanges, List<_Change> theirsChanges) {
+  final o = _sideCells(base, start, end, oursChanges);
+  final t = _sideCells(base, start, end, theirsChanges);
+  final rows = <MergeRow>[];
+  for (var i = start; i <= end; i++) {
+    final ol = o.inserts[i] ?? const <String>[];
+    final tl = t.inserts[i] ?? const <String>[];
+    final n = ol.length > tl.length ? ol.length : tl.length;
+    for (var k = 0; k < n; k++) {
+      rows.add(MergeRow(
+        ours: k < ol.length ? ol[k] : null,
+        theirs: k < tl.length ? tl[k] : null,
+      ));
+    }
+    if (i < end) {
+      rows.add(MergeRow(base: base[i], ours: o.cells[i], theirs: t.cells[i]));
+    }
+  }
+  return rows;
+}
+
+MergeGroup _group(List<String> base, int start, int end,
+    List<_Change> oursChanges, List<_Change> theirsChanges) {
+  final hasOurs = oursChanges.isNotEmpty;
+  final hasTheirs = theirsChanges.isNotEmpty;
+  final oursLines = _applyChanges(base, start, end, oursChanges);
+  final theirsLines = _applyChanges(base, start, end, theirsChanges);
+  final MergeGroupKind kind;
+  if (!hasOurs && !hasTheirs) {
+    kind = MergeGroupKind.common;
+  } else if (hasOurs && !hasTheirs) {
+    kind = MergeGroupKind.oursOnly;
+  } else if (!hasOurs) {
+    kind = MergeGroupKind.theirsOnly;
+  } else {
+    kind = _sameLines(oursLines, theirsLines)
+        ? MergeGroupKind.bothSame
+        : MergeGroupKind.conflict;
+  }
+  return MergeGroup(
+    kind: kind,
+    rows: _alignedRows(base, start, end, oursChanges, theirsChanges),
+    baseLines: base.sublist(start, end),
+    oursLines: oursLines,
+    theirsLines: theirsLines,
+  );
+}
+
+/// Merge three full-file versions into aligned groups.
+///
+/// This is the diff3 combination step: diff the base against each side, then
+/// walk both change lists together. Overlapping changes go into one group;
+/// identical results on both sides are not a conflict.
+ThreeWayMerge threeWayMerge(
+    {required String base, required String ours, required String theirs}) {
+  final b = _mergeLines(base);
+  final oc = _changesFor(b, _mergeLines(ours));
+  final tc = _changesFor(b, _mergeLines(theirs));
+  final groups = <MergeGroup>[];
+  var oi = 0, ti = 0, cursor = 0;
+  const far = 1 << 30;
+
+  while (oi < oc.length || ti < tc.length) {
+    final os = oi < oc.length ? oc[oi].baseStart : far;
+    final ts = ti < tc.length ? tc[ti].baseStart : far;
+    final start = os < ts ? os : ts;
+    if (start > cursor) {
+      groups.add(_group(b, cursor, start, const [], const []));
+      cursor = start;
+    }
+
+    var end = start;
+    final og = <_Change>[];
+    final tg = <_Change>[];
+    var grew = true;
+    while (grew) {
+      grew = false;
+      while (oi < oc.length && oc[oi].baseStart <= end) {
+        final c = oc[oi++];
+        og.add(c);
+        if (c.baseEnd > end) {
+          end = c.baseEnd;
+          grew = true;
+        }
+      }
+      while (ti < tc.length && tc[ti].baseStart <= end) {
+        final c = tc[ti++];
+        tg.add(c);
+        if (c.baseEnd > end) {
+          end = c.baseEnd;
+          grew = true;
+        }
+      }
+    }
+    groups.add(_group(b, start, end, og, tg));
+    cursor = end;
+  }
+  if (cursor < b.length) {
+    groups.add(_group(b, cursor, b.length, const [], const []));
+  }
+  return ThreeWayMerge(groups);
 }
 
 /* ---------- change navigation ---------- */
@@ -926,7 +1295,8 @@ ImportPatchFile _gitPatchFile(_PatchLines lines, int start, int end) {
   final first = _readGitPath(value, 0);
   final secondStart = _skipSpaces(value, first.$2);
   final second = _readGitPath(value, secondStart);
-  if (first.$1.isEmpty || second.$1.isEmpty ||
+  if (first.$1.isEmpty ||
+      second.$1.isEmpty ||
       value.substring(second.$2).trim().isNotEmpty) {
     throw const FormatException('无法识别补丁格式：Git diff 文件路径格式无效');
   }
@@ -1024,7 +1394,12 @@ String _decodeUtf8(List<int> bytes) {
       runes.add(0xfffd);
       continue;
     }
-    var rune = first & (count == 1 ? 0x1f : count == 2 ? 0x0f : 0x07);
+    var rune = first &
+        (count == 1
+            ? 0x1f
+            : count == 2
+                ? 0x0f
+                : 0x07);
     var valid = true;
     for (var j = 0; j < count; j++) {
       final next = bytes[i++];
@@ -1054,9 +1429,8 @@ int _skipSpaces(String value, int offset) {
 
 String _decodeGitPath(String value) => _readGitPath(value, 0).$1;
 
-String _decodeGitLabel(String value) => value.startsWith('"')
-    ? _decodeGitPath(value)
-    : value;
+String _decodeGitLabel(String value) =>
+    value.startsWith('"') ? _decodeGitPath(value) : value;
 
 String _stripDiffPrefix(String path, String prefix) =>
     path.startsWith(prefix) ? path.substring(prefix.length) : path;
@@ -1098,7 +1472,11 @@ ImportPatchFile _unifiedPatchFile(_PatchLines lines, int start, int end) {
   return ImportPatchFile(
     path: deleted ? oldPath : newPath,
     patch: lines.values.sublist(start, end).map((line) => line.raw).join(),
-    status: added ? 'added' : deleted ? 'deleted' : 'modified',
+    status: added
+        ? 'added'
+        : deleted
+            ? 'deleted'
+            : 'modified',
     targetPath: deleted ? oldPath : newPath,
   );
 }

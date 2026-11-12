@@ -1,6 +1,7 @@
 import 'package:cgit_flutter/diff_view.dart';
 import 'package:cgit_flutter/git_text.dart';
 import 'package:cgit_flutter/theme.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -13,6 +14,41 @@ Widget _host(Widget child) => MaterialApp(
     );
 
 void main() {
+  testWidgets(
+      'long lines scroll together and wrapping preserves picked changes',
+      (tester) async {
+    final long = 'value_${'abcdef' * 60}';
+    final patchText = '@@ -1 +1 @@\n-$long\n+${long}new\n';
+    String? applied;
+    await tester.pumpWidget(_host(DiffPane(
+        hunks: [patchText],
+        mode: DiffMode.split,
+        onApply: (p, _) => applied = p)));
+    final left = find.text(long, findRichText: true);
+    final before = tester.getRect(left);
+    expect(before.height, lessThan(30));
+    final right = find.text('${long}new', findRichText: true);
+    final beforeRight = tester.getRect(right);
+    final gutter = tester.getRect(find.text('1').first);
+    tester.binding.handlePointerEvent(PointerScrollEvent(
+        position: Offset(100, before.top + 5),
+        scrollDelta: const Offset(100, 0)));
+    await tester.pump();
+    expect(tester.getRect(left).left, before.left - 100);
+    expect(tester.getRect(right).left, beforeRight.left - 100);
+    expect(tester.getRect(find.text('1').first), gutter);
+    await tester.tap(find.text('1').first);
+    await tester.pump();
+    await tester.tap(find.text('自动换行：关'));
+    await tester.pump();
+    expect(tester.getRect(left).height, greaterThan(before.height));
+    await tester.tap(find.text('自动换行：开'));
+    await tester.pump();
+    await tester.tap(find.text('暂存选中行'));
+    expect(applied, patchText.replaceFirst('@@ -1 +1 @@', '@@ -1,1 +1,1 @@'));
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('Go syntax is coloured in split and unified views',
       (tester) async {
     for (final mode in DiffMode.values) {
@@ -174,6 +210,59 @@ void main() {
     expect(find.text('-b'), findsOneWidget);
     expect(find.text('+B'), findsOneWidget);
     expect(find.text('+c'), findsOneWidget);
+  });
+
+  testWidgets('a pure deletion is a gray divider fragment, not a blank row',
+      (tester) async {
+    const removed = '@@ -3,4 +3,1 @@\n keep\n-gone one\n-gone two\n tail\n';
+    String? applied;
+    await tester.pumpWidget(_host(DiffPane(
+      hunks: const [removed],
+      mode: DiffMode.split,
+      onApply: (p, _) => applied = p,
+    )));
+
+    // The removed lines are not rows. A row would paint a full-height blank
+    // on the new side, which is what read as an insertion.
+    expect(find.text('gone one'), findsNothing);
+    expect(find.text('gone two'), findsNothing);
+    // Context is drawn once per pane, so both sides still show it.
+    expect(find.text('keep'), findsNWidgets(2));
+    expect(find.text('tail'), findsNWidgets(2));
+
+    final drawn = tester
+        .widgetList<CustomPaint>(find.byType(CustomPaint))
+        .map((paint) => paint.painter)
+        .whereType<DeletionFragmentPainter>()
+        .where((painter) => painter.fill == Palette.dark.deletedFragment)
+        .toList();
+    expect(drawn, hasLength(2),
+        reason: 'one stripe slice per removed line, not a blank editor row');
+    expect(drawn.first.topOpen, isFalse);
+    expect(drawn.last.bottomOpen, isFalse,
+        reason: 'the run pinches closed on its last line');
+
+    // The polygon sits in the stripe — not a rectangle filling either editor.
+    final paints = find.byWidgetPredicate((widget) =>
+        widget is CustomPaint &&
+        widget.painter is DeletionFragmentPainter &&
+        (widget.painter! as DeletionFragmentPainter).fill ==
+            Palette.dark.deletedFragment);
+    final slot = tester.getRect(paints.first);
+    final keep = tester.getRect(find.text('keep').first);
+    expect(slot.left, lessThan(keep.right),
+        reason: 'the fragment lives in the divider, not in the editor');
+    expect(slot.width, lessThan(80),
+        reason: 'the fragment is the divider, not an editor column');
+    expect(slot.height, lessThan(keep.height * 1.5),
+        reason: 'a slice is one line; the run is the stack of slices');
+
+    await tester.tap(paints.first);
+    await tester.pump();
+    await tester.tap(find.text('暂存选中行'));
+    expect(applied, contains('-gone one'));
+    expect(applied, contains('-gone two'));
+    expect(applied, isNot(contains('+gone')));
   });
 
   testWidgets('an empty patch says so instead of rendering nothing',

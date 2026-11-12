@@ -1,5 +1,8 @@
 // SelectionArea lives in the material library, so the whole file takes that
 // import; nothing below uses a Material-styled widget.
+import 'dart:math' as math;
+
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -9,6 +12,10 @@ import 'theme.dart';
 import 'syntax_theme.dart';
 
 enum DiffMode { split, unified }
+
+/// Width of the stripe between the two panes. JetBrains draws the deleted
+/// fragment here, not as a blank row in either editor.
+const _dividerWidth = 72.0;
 
 /// Read-only preview for a complete patch, including untracked-file diffs.
 class PatchPreview extends StatelessWidget {
@@ -43,7 +50,7 @@ class PatchPreview extends StatelessWidget {
 /// The picked set is state and the rows are a pure function of it, so there is
 /// no separate paint step. Beyond drawing the rows, this file is the plumbing
 /// that carries the selection back up.
-class DiffPane extends StatelessWidget {
+class DiffPane extends StatefulWidget {
   const DiffPane({
     super.key,
     required this.hunks,
@@ -69,47 +76,172 @@ class DiffPane extends StatelessWidget {
   final bool staged;
 
   @override
-  Widget build(BuildContext context) {
-    final palette = Theming.of(context);
-    if (hunks.isEmpty) {
-      return Container(
-        color: palette.diffBg,
-        alignment: Alignment.center,
-        child: Text('没有文本差异', style: ui.copyWith(color: palette.textDim)),
-      );
-    }
+  State<DiffPane> createState() => _DiffPaneState();
+}
 
-    // SelectionArea is what makes dragging a selection across rows and copying
-    // it work. It only covers the
-    // widgets built below it, which is why the rows are built eagerly rather
-    // than through ListView.builder.
-    //
-    // ponytail: eager build keeps selection whole. Switch to ListView.builder if a single file's diff ever
-    // gets big enough to stutter — and accept that selection then stops at the
-    // viewport edge.
-    return Container(
-      color: palette.diffBg,
-      child: SelectionArea(
-        child: SingleChildScrollView(
+class _DiffPaneState extends State<DiffPane> {
+  final _horizontal = ScrollController();
+  final _vertical = ScrollController();
+  bool _wrap = false;
+  double _offset = 0;
+  double _codeWidth = 0;
+  List<String>? _measuredHunks;
+  TextScaler? _measuredScaler;
+
+  @override
+  void initState() {
+    super.initState();
+    _horizontal.addListener(() => setState(() => _offset = _horizontal.offset));
+  }
+
+  @override
+  void dispose() {
+    _horizontal.dispose();
+    _vertical.dispose();
+    super.dispose();
+  }
+
+  double _measure() {
+    final scaler = MediaQuery.textScalerOf(context);
+    if (_measuredHunks == widget.hunks && _measuredScaler == scaler) {
+      return _codeWidth;
+    }
+    _measuredHunks = widget.hunks;
+    _measuredScaler = scaler;
+    _codeWidth = 0;
+    final painter =
+        TextPainter(textDirection: TextDirection.ltr, textScaler: scaler);
+    for (final hunk in widget.hunks) {
+      for (final line in hunk.split('\n').skip(1)) {
+        painter.text =
+            TextSpan(text: line.isEmpty ? '' : line.substring(1), style: mono);
+        painter.layout();
+        _codeWidth = math.max(_codeWidth, painter.width + 24);
+      }
+    }
+    painter.dispose();
+    return _codeWidth;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final p = Theming.of(context);
+    if (widget.hunks.isEmpty) {
+      return Container(
+          color: p.diffBg,
+          alignment: Alignment.center,
+          child: Text('没有文本差异', style: ui.copyWith(color: p.textDim)));
+    }
+    return LayoutBuilder(builder: (context, box) {
+      final addedFile = widget.hunks.every((hunk) {
+        final paired = pairHunkLines(hunk);
+        return paired != null &&
+            paired.head.oldStart == 0 &&
+            paired.rows.every((row) => row.left == null);
+      });
+      final cellWidth = widget.mode == DiffMode.split && !addedFile
+          ? (box.maxWidth - 88 - _dividerWidth) / 2
+          : box.maxWidth;
+      final overflow = math.max(0.0, _measure() - cellWidth + 16);
+      final offset = _wrap ? 0.0 : _offset.clamp(0.0, overflow);
+      return Container(
+          color: p.diffBg,
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              for (final (i, hunk) in hunks.indexed)
-                _HunkView(
-                  key: ValueKey(hunk),
-                  hunk: hunk,
-                  file: file,
-                  index: i,
-                  mode: mode,
-                  onApply: onApply,
-                  staged: staged,
-                  blockKeys: blockKeys,
-                ),
-            ],
-          ),
-        ),
-      ),
-    );
+              mainAxisSize:
+                  box.hasBoundedHeight ? MainAxisSize.max : MainAxisSize.min,
+              children: [
+                Container(
+                    height: 30,
+                    color: p.bgAlt,
+                    child: Row(children: [
+                      const SizedBox(width: 8),
+                      if (widget.mode == DiffMode.split)
+                        Expanded(
+                            child: Row(children: [
+                          Expanded(
+                              child: Text('原版本',
+                                  style: ui.copyWith(
+                                      color: p.textDim, fontSize: 11))),
+                          Expanded(
+                              child: Text('新版本',
+                                  style: ui.copyWith(
+                                      color: p.textDim, fontSize: 11))),
+                        ]))
+                      else
+                        const Spacer(),
+                      TextButton(
+                          style: TextButton.styleFrom(
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 8),
+                              foregroundColor: p.textDim,
+                              textStyle: ui.copyWith(fontSize: 11)),
+                          onPressed: () => setState(() => _wrap = !_wrap),
+                          child: Text(_wrap ? '自动换行：开' : '自动换行：关')),
+                    ])),
+                Flexible(
+                    fit: FlexFit.loose,
+                    child: Listener(
+                        onPointerSignal: (event) {
+                          if (_wrap ||
+                              event is! PointerScrollEvent ||
+                              !_horizontal.hasClients) {
+                            return;
+                          }
+                          final dx = event.scrollDelta.dx != 0
+                              ? event.scrollDelta.dx
+                              : HardwareKeyboard.instance.isShiftPressed
+                                  ? event.scrollDelta.dy
+                                  : 0.0;
+                          if (dx == 0) return;
+                          GestureBinding.instance.pointerSignalResolver
+                              .register(event, (_) {
+                            _horizontal.jumpTo((_horizontal.offset + dx).clamp(
+                                0.0, _horizontal.position.maxScrollExtent));
+                          });
+                        },
+                        child: SelectionArea(
+                            child: Scrollbar(
+                                controller: _vertical,
+                                child: SingleChildScrollView(
+                                  controller: _vertical,
+                                  child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.stretch,
+                                      children: [
+                                        for (final (i, hunk)
+                                            in widget.hunks.indexed)
+                                          _HunkView(
+                                            key: ValueKey(hunk),
+                                            hunk: hunk,
+                                            file: widget.file,
+                                            index: i,
+                                            mode: widget.mode,
+                                            onApply: widget.onApply,
+                                            staged: widget.staged,
+                                            blockKeys: widget.blockKeys,
+                                            wrap: _wrap,
+                                            offset: offset,
+                                            codeWidth:
+                                                math.max(_codeWidth, cellWidth),
+                                          ),
+                                      ]),
+                                ))))),
+                // Keep the scrollable mounted when wrapping changes, so offset and
+                // selected hunk rows survive switching presentation.
+                SizedBox(
+                    height: !_wrap && overflow > 0 ? 14 : 0,
+                    child: Scrollbar(
+                      controller: _horizontal,
+                      thumbVisibility: !_wrap && overflow > 0,
+                      notificationPredicate: (n) => n.depth == 0,
+                      child: SingleChildScrollView(
+                          controller: _horizontal,
+                          scrollDirection: Axis.horizontal,
+                          child: SizedBox(
+                              width: box.maxWidth + overflow, height: 1)),
+                    )),
+              ]));
+    });
   }
 }
 
@@ -123,8 +255,14 @@ class _HunkView extends StatefulWidget {
     required this.onApply,
     required this.staged,
     required this.blockKeys,
+    required this.wrap,
+    required this.offset,
+    required this.codeWidth,
   });
 
+  final bool wrap;
+  final double offset;
+  final double codeWidth;
   final String hunk;
   final String file;
   final int index;
@@ -265,16 +403,22 @@ class _HunkViewState extends State<_HunkView> {
                   ? palette.delRow
                   : null,
           padding: const EdgeInsets.symmetric(horizontal: 8),
-          child: code == null
-              ? Text(line, style: mono.copyWith(color: color))
-              : Text.rich(
-                  TextSpan(children: [
-                    TextSpan(
-                        text: line.isEmpty ? '' : line[0],
-                        style: TextStyle(color: color)),
-                    code,
-                  ]),
-                  style: mono.copyWith(color: palette.text)),
+          child: _CodeViewport(
+              wrap: widget.wrap,
+              offset: widget.offset,
+              width: widget.codeWidth + 16,
+              child: code == null
+                  ? Text(line,
+                      style: mono.copyWith(color: color), softWrap: widget.wrap)
+                  : Text.rich(
+                      TextSpan(children: [
+                        TextSpan(
+                            text: line.isEmpty ? '' : line[0],
+                            style: TextStyle(color: color)),
+                        code,
+                      ]),
+                      style: mono.copyWith(color: palette.text),
+                      softWrap: widget.wrap)),
         ),
       ));
     }
@@ -282,8 +426,12 @@ class _HunkViewState extends State<_HunkView> {
   }
 
   /// Fixed-width number columns and two equal text columns, so rows stay aligned
-  /// without synchronising two scroll positions. Long lines wrap inside their
-  /// own half rather than scrolling.
+  /// without synchronising two scroll positions. Both text columns share the
+  /// horizontal offset; line numbers and actions stay fixed.
+  ///
+  /// A pure deletion is not a row. It is a gray trapezoid on the divider, the
+  /// same fragment the side-by-side viewer paints between the panes: wide on
+  /// the old side, pinched to the boundary where the new file has no lines.
   List<Widget> _splitRows(Palette palette, bool interactive) {
     final paired = pairHunkLines(widget.hunk);
     if (paired == null) return _unifiedRows(palette, interactive);
@@ -291,6 +439,8 @@ class _HunkViewState extends State<_HunkView> {
     final rows = <Widget>[];
     final addedFile = paired.head.oldStart == 0 &&
         paired.rows.every((row) => row.left == null);
+    final fragments =
+        addedFile ? const <DeletionFragment>[] : deletionFragments(widget.hunk);
     for (final (i, row) in paired.rows.indexed) {
       IntraDiff? intra;
       if (row.type == RowType.mod) {
@@ -309,6 +459,9 @@ class _HunkViewState extends State<_HunkView> {
                 _NumCell(cell: row.left),
                 Expanded(
                   child: _TextCell(
+                    wrap: widget.wrap,
+                    offset: widget.offset,
+                    codeWidth: widget.codeWidth,
                     cell: row.left,
                     syntax: _syntax.oldLines[row.left?.no],
                     part: intra?.left,
@@ -318,10 +471,18 @@ class _HunkViewState extends State<_HunkView> {
                         : null,
                   ),
                 ),
+                _DividerSlot(
+                  row: i,
+                  fragments: fragments,
+                  onTap: _tap,
+                ),
               ],
               _NumCell(cell: row.right),
               Expanded(
                 child: _TextCell(
+                  wrap: widget.wrap,
+                  offset: widget.offset,
+                  codeWidth: widget.codeWidth,
                   cell: row.right,
                   syntax: _syntax.newLines[row.right?.no],
                   part: intra?.right,
@@ -335,6 +496,34 @@ class _HunkViewState extends State<_HunkView> {
           ),
         ),
       ));
+    }
+    // A deletion that ends the hunk starts past the last content row. Pad one
+    // empty row per leftover line so every slice of the polygon has a line to
+    // paint on; without them the removal disappears.
+    if (!addedFile) {
+      var tail = 0;
+      for (final fragment in fragments) {
+        final past = fragment.before + fragment.lines - paired.rows.length;
+        if (past > tail) tail = past;
+      }
+      final line =
+          MediaQuery.textScalerOf(context).scale(mono.fontSize!) * mono.height!;
+      for (var extra = 0; extra < tail; extra++) {
+        rows.add(SizedBox(
+          height: line,
+          child: Row(children: [
+            const SizedBox(width: 44),
+            const Expanded(child: SizedBox.shrink()),
+            _DividerSlot(
+              row: paired.rows.length + extra,
+              fragments: fragments,
+              onTap: _tap,
+            ),
+            const SizedBox(width: 44),
+            const Expanded(child: SizedBox.shrink()),
+          ]),
+        ));
+      }
     }
     return rows;
   }
@@ -488,8 +677,14 @@ class _TextCell extends StatelessWidget {
     required this.part,
     required this.intraColor,
     required this.tint,
+    required this.wrap,
+    required this.offset,
+    required this.codeWidth,
   });
 
+  final bool wrap;
+  final double offset;
+  final double codeWidth;
   final DiffCell? cell;
   final TextSpan? syntax;
   final LinePart? part;
@@ -511,15 +706,189 @@ class _TextCell extends StatelessWidget {
 
     final style = mono.copyWith(color: palette.text);
     final Widget text = syntax == null
-        ? Text(cell!.text, style: style)
-        : Text.rich(markIntra(syntax!, part, intraColor), style: style);
+        ? Text(cell!.text, style: style, softWrap: wrap)
+        : Text.rich(markIntra(syntax!, part, intraColor),
+            style: style, softWrap: wrap);
 
     return Container(
       width: double.infinity,
       color: tint,
       padding: const EdgeInsets.symmetric(horizontal: 8),
-      child: text,
+      child: _CodeViewport(
+          wrap: wrap, offset: offset, width: codeWidth, child: text),
     );
+  }
+}
+
+/// One line of the stripe between the panes. A deleted run is sliced across
+/// the rows it covers, so nothing paints outside its own line — a taller
+/// polygon is clipped by the scroll view and comes back as a blank.
+class _DividerSlot extends StatelessWidget {
+  const _DividerSlot({
+    required this.row,
+    required this.fragments,
+    required this.onTap,
+  });
+  final int row;
+  final List<DeletionFragment> fragments;
+  final void Function(List<int> picks) onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = Theming.of(context);
+    final slice = _sliceAt(row, fragments);
+    return SizedBox(
+      width: _dividerWidth,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: slice == null ? null : () => onTap(slice.picks),
+        child: CustomPaint(
+          painter: DeletionFragmentPainter(
+            lines: 1,
+            lineHeight: 1,
+            fill: slice == null ? palette.bgAlt : palette.deletedFragment,
+            border: palette.red.withValues(alpha: slice == null ? 0 : 0.55),
+            topOpen: slice != null && !slice.top,
+            bottomOpen: slice != null && !slice.bottom,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _FragmentSlice {
+  const _FragmentSlice(this.picks, {required this.top, required this.bottom});
+  final List<int> picks;
+  final bool top;
+  final bool bottom;
+}
+
+/// The line of a deleted run that falls on [row], if any.
+///
+/// [DeletionFragment.before] is the boundary the run starts at, and the run
+/// covers the next [DeletionFragment.lines] rows. A run past the last content
+/// row is hosted by the padded row the caller adds.
+_FragmentSlice? _sliceAt(int row, List<DeletionFragment> fragments) {
+  for (final fragment in fragments) {
+    final last = fragment.before + fragment.lines - 1;
+    if (row < fragment.before || row > last) continue;
+    return _FragmentSlice(
+      fragment.picks,
+      top: row == fragment.before,
+      bottom: row == last,
+    );
+  }
+  return null;
+}
+
+/// Gray trapezoid of a deleted run, copied from the divider polygon.
+///
+/// Left edge spans the removed lines. Right edge collapses to the boundary
+/// after those lines, because the new side has nothing there. The two edges
+/// meet through the same cubic the viewer uses (control points at 30% and
+/// 70% of the stripe), which is what keeps a tall deletion a chevron rather
+/// than a rectangle of blank lines.
+class DeletionFragmentPainter extends CustomPainter {
+  const DeletionFragmentPainter({
+    required this.lines,
+    required this.lineHeight,
+    required this.fill,
+    required this.border,
+    this.topOpen = false,
+    this.bottomOpen = false,
+  });
+
+  final int lines;
+  final double lineHeight;
+  final Color fill;
+  final Color border;
+
+  /// This slice continues a run that started above, so the top edge is not the
+  /// point of the chevron.
+  final bool topOpen;
+
+  /// This slice continues below, so the right edge has not reached the point.
+  final bool bottomOpen;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (lines < 1 || size.width < 4 || size.height < 1) return;
+    // The stripe is one line tall. A cubic that pinches inside that line
+    // collapses to a diagonal stroke — the hatch the screenshots show. Fill
+    // the slice instead. The first line draws the point on the left, the last
+    // line draws it on the right, and the stack is the gray chevron.
+    final mid = size.width * 0.5;
+    final path = Path();
+    if (!topOpen && !bottomOpen) {
+      path
+        ..moveTo(0, size.height / 2)
+        ..lineTo(mid, 0)
+        ..lineTo(size.width, size.height / 2)
+        ..lineTo(mid, size.height)
+        ..close();
+    } else if (!topOpen) {
+      path
+        ..moveTo(0, size.height / 2)
+        ..lineTo(mid, 0)
+        ..lineTo(size.width, 0)
+        ..lineTo(size.width, size.height)
+        ..lineTo(mid, size.height)
+        ..close();
+    } else if (!bottomOpen) {
+      path
+        ..moveTo(0, 0)
+        ..lineTo(size.width, size.height / 2)
+        ..lineTo(0, size.height)
+        ..close();
+    } else {
+      path.addRect(Offset.zero & size);
+    }
+    canvas.drawPath(path, Paint()..color = fill);
+    if (border.a == 0) return;
+    final edge = Paint()
+      ..color = border
+      ..strokeWidth = 2;
+    canvas.drawLine(Offset(size.width - 1, 1),
+        Offset(size.width - 1, size.height - 1), edge);
+  }
+
+  @override
+  bool shouldRepaint(DeletionFragmentPainter old) =>
+      old.lines != lines ||
+      old.lineHeight != lineHeight ||
+      old.fill != fill ||
+      old.border != border ||
+      old.topOpen != topOpen ||
+      old.bottomOpen != bottomOpen;
+}
+
+/// Clip each column separately so scrolling never moves the divider or gutter.
+class _CodeViewport extends StatelessWidget {
+  const _CodeViewport(
+      {required this.wrap,
+      required this.offset,
+      required this.width,
+      required this.child});
+  final bool wrap;
+  final double offset;
+  final double width;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    if (wrap) return child;
+    return ClipRect(
+        child: SizedBox(
+            height: MediaQuery.textScalerOf(context).scale(mono.fontSize!) *
+                mono.height!,
+            child: OverflowBox(
+              alignment: Alignment.topLeft,
+              minWidth: width,
+              maxWidth: width,
+              child:
+                  Transform.translate(offset: Offset(-offset, 0), child: child),
+            )));
   }
 }
 

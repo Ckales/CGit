@@ -1751,6 +1751,72 @@ pub fn get_conflicts(path: String) -> Result<Vec<String>, String> {
     Ok(out)
 }
 
+/// The three index stages of a conflicted path, decoded as UTF-8.
+///
+/// `None` means the stage is absent (add/add has no base) or the blob is not
+/// text. The caller falls back to the worktree file / whole-file handling.
+#[derive(Serialize)]
+pub struct ConflictVersions {
+    pub base: Option<String>,
+    pub ours: Option<String>,
+    pub theirs: Option<String>,
+}
+
+/// Full base/ours/theirs files for one conflicted path, straight from the index.
+///
+/// Reading stage 1 directly is what lets the merge UI show the *original* two
+/// sides: the worktree file has already had non-conflicting changes merged into
+/// it, so reconstructing either side from its markers is lossy.
+pub fn get_conflict_versions(path: String, file: String) -> Result<ConflictVersions, String> {
+    let repo = open(&path)?;
+    let index = repo.index_or_empty().map_err(|e| e.to_string())?;
+    let mut base = None;
+    let mut ours = None;
+    let mut theirs = None;
+    let mut found = false;
+    for entry in index.entries() {
+        if entry.path(&index).to_string() != file {
+            continue;
+        }
+        let slot = match entry.stage() {
+            gix::index::entry::Stage::Base => &mut base,
+            gix::index::entry::Stage::Ours => &mut ours,
+            gix::index::entry::Stage::Theirs => &mut theirs,
+            gix::index::entry::Stage::Unconflicted => continue,
+        };
+        found = true;
+        let blob = repo.find_blob(entry.id).map_err(|e| e.to_string())?;
+        *slot = String::from_utf8(blob.data.clone()).ok();
+    }
+    if !found {
+        return Err(format!("{file} 不处于未解决的冲突状态"));
+    }
+    Ok(ConflictVersions { base, ours, theirs })
+}
+
+/// The branch recorded for the merge in progress, for the merge window's
+/// "来自 <branch> 的更改" header.
+///
+/// Git writes `MERGE_MSG` with the merged name quoted on the first line
+/// (`Merge branch 'feature' into main`, and the remote/tag variants). Only a
+/// merge has this file; rebase and cherry-pick callers keep their generic label.
+pub fn merge_source(path: String) -> Result<Option<String>, String> {
+    let repo = open(&path)?;
+    let Ok(msg) = std::fs::read_to_string(repo.path().join("MERGE_MSG")) else {
+        return Ok(None);
+    };
+    let line = msg.lines().next().unwrap_or_default();
+    let Some(start) = line.find('\'') else {
+        return Ok(None);
+    };
+    let rest = &line[start + 1..];
+    let Some(len) = rest.find('\'') else {
+        return Ok(None);
+    };
+    let name = &rest[..len];
+    Ok((!name.is_empty()).then(|| name.to_string()))
+}
+
 /// Rewrite a conflicted file's markers in the given style. `diff3` adds the
 /// `|||||||` common-ancestor section, which is the only way to get *per-block*
 /// base text — the index only holds a whole-file stage-1 blob.
@@ -3838,6 +3904,52 @@ mod tests {
         assert_eq!(f.len(), 1, "冲突文件应只有一行，实际：{f:?}");
         assert_eq!(f[0].status, "conflict");
         assert_eq!(get_conflicts(repo).unwrap(), vec!["f".to_string()]);
+    }
+
+    #[test]
+    fn conflict_versions_are_the_three_index_stages() {
+        let repo = temp_repo("conflict-versions");
+        let dir = std::path::Path::new(&repo);
+        std::fs::write(dir.join("f"), "base\n").unwrap();
+        run_git(&repo, &["commit", "-qam", "base"]).unwrap();
+        run_git(&repo, &["checkout", "-q", "-b", "feat"]).unwrap();
+        std::fs::write(dir.join("f"), "theirs\n").unwrap();
+        run_git(&repo, &["commit", "-qam", "feat"]).unwrap();
+        run_git(&repo, &["checkout", "-q", "master"]).unwrap();
+        std::fs::write(dir.join("f"), "ours\n").unwrap();
+        run_git(&repo, &["commit", "-qam", "master"]).unwrap();
+        let _ = run_git(&repo, &["merge", "feat"]);
+
+        let versions = get_conflict_versions(repo.clone(), "f".into()).unwrap();
+        assert_eq!(versions.base.as_deref(), Some("base\n"));
+        assert_eq!(versions.ours.as_deref(), Some("ours\n"));
+        assert_eq!(versions.theirs.as_deref(), Some("theirs\n"));
+
+        assert!(get_conflict_versions(repo, "nope".into()).is_err());
+    }
+
+    #[test]
+    fn merge_source_names_the_branch_being_merged() {
+        let repo = temp_repo("merge-source");
+        let dir = std::path::Path::new(&repo);
+        std::fs::write(dir.join("f"), "base\n").unwrap();
+        run_git(&repo, &["commit", "-qam", "base"]).unwrap();
+        run_git(&repo, &["checkout", "-q", "-b", "feat"]).unwrap();
+        std::fs::write(dir.join("f"), "feat\n").unwrap();
+        run_git(&repo, &["commit", "-qam", "feat"]).unwrap();
+        run_git(&repo, &["checkout", "-q", "master"]).unwrap();
+        std::fs::write(dir.join("f"), "master\n").unwrap();
+        run_git(&repo, &["commit", "-qam", "master"]).unwrap();
+        assert_eq!(merge_source(repo.clone()).unwrap(), None);
+        let _ = run_git(&repo, &["merge", "feat"]);
+
+        assert_eq!(
+            merge_source(repo.clone()).unwrap(),
+            Some("feat".to_string())
+        );
+
+        run_git(&repo, &["merge", "--abort"]).unwrap();
+        assert_eq!(merge_source(repo).unwrap(), None);
     }
 
     fn temp_fs_dir(name: &str) -> PathBuf {

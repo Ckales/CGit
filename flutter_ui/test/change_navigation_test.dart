@@ -230,7 +230,8 @@ void main() {
     final key = pane.blockKeys['0:${last ? rows.last : rows.first}']!;
     final viewport = tester.getRect(find.descendant(
         of: find.byType(DiffPane),
-        matching: find.byType(SingleChildScrollView)));
+        matching: find.byWidgetPredicate((w) =>
+            w is SingleChildScrollView && w.scrollDirection == Axis.vertical)));
     final block = tester.getRect(find.byKey(key));
     expect(block.top, greaterThanOrEqualTo(viewport.top));
     expect(block.bottom, lessThanOrEqualTo(viewport.bottom));

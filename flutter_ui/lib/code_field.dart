@@ -258,12 +258,14 @@ class CodeField extends StatelessWidget {
     required this.indentUnit,
     this.onChanged,
     this.expands = false,
+    this.focusNode,
   });
 
   final CodeController controller;
   final String indentUnit;
   final ValueChanged<String>? onChanged;
   final bool expands;
+  final FocusNode? focusNode;
 
   @override
   Widget build(BuildContext context) {
@@ -288,9 +290,11 @@ class CodeField extends StatelessWidget {
       },
       child: TextField(
         controller: controller,
+        focusNode: focusNode,
         maxLines: null,
         expands: expands,
         style: mono.copyWith(color: p.text),
+        strutStyle: StrutStyle.fromTextStyle(mono, forceStrutHeight: true),
         cursorColor: p.accent,
         decoration: const InputDecoration.collapsed(hintText: ''),
         onChanged: onChanged,

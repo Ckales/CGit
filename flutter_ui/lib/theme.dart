@@ -61,7 +61,26 @@ class Palette {
   Color get addRow => green.withValues(alpha: 0.14);
   Color get intraDel => red.withValues(alpha: 0.42);
   Color get intraAdd => green.withValues(alpha: 0.45);
-  Color get emptyCell => textDim.withValues(alpha: 0.09);
+
+  /// 合并冲突的代码底色与实色标记，两侧使用相同的冲突色。
+  Color get mergeConflictMarker => identical(this, light)
+      ? Color.alphaBlend(intraDel, diffBg)
+      : const Color(0xFF9E1C22);
+  Color get mergeConflictRow => identical(this, light)
+      ? Color.alphaBlend(delRow, diffBg)
+      : Color.alphaBlend(mergeConflictMarker.withValues(alpha: 0.42), diffBg);
+  Color get mergeConflictInline => identical(this, light)
+      ? intraDel
+      : mergeConflictMarker.withValues(alpha: 0.72);
+  // Neutral fill for an empty diff cell or an ignored hatch.
+  Color get emptyCell => textDim.withValues(alpha: 0.16);
+
+  /// The gray deleted fragment on the side-by-side divider. Darcula uses
+  /// #484A4A for DIFF_DELETED; light uses #D6D6D6. Not the red row tint — that
+  /// wash is what made a removal read as an inserted blank.
+  Color get deletedFragment => identical(this, light)
+      ? const Color(0xFFD6D6D6)
+      : const Color(0xFF484A4A);
 }
 
 class Theming extends InheritedWidget {

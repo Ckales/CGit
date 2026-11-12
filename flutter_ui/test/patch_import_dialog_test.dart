@@ -7,6 +7,42 @@ import 'package:flutter_test/flutter_test.dart';
 const first = 'diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-old\n+first\n';
 const second = 'diff --git a/b.txt b/b.txt\n--- a/b.txt\n+++ b/b.txt\n@@ -1 +1 @@\n-old\n+second\n';
 void main() {
+  testWidgets('patch conflict starts from the full ancestor and bulk accepts only clean changes', (t) async {
+    var writes = 0;
+    await t.pumpWidget(MaterialApp(home: Theming(palette: Palette.dark,
+      child: PatchImportDialog(files: splitImportPatch(first), source: '文件',
+        prepare: (_) async => PreparedPatch.fromJson({
+          'token': 'test', 'files': [{
+            'path': 'a.txt', 'conflict': true, 'binary': false,
+            'base': 'head\nbase\ncontext\nclean\ntail',
+            'ours': 'head\nlocal\ncontext\nclean\ntail',
+            'theirs': 'head\npatch\ncontext\nchanged\ntail',
+            'content': 'head\n<<<<<<< HEAD\nlocal\n=======\npatch\n>>>>>>> incoming\ncontext\nchanged\ntail',
+          }],
+        }),
+        finish: (_, __) async { writes++; }, discard: (_) async {},
+      ),
+    )));
+    await t.tap(find.text('应用所选补丁'));
+    await t.pumpAndSettle();
+    String result() => t.widget<TextField>(find.byType(TextField)).controller!.text;
+    expect(result(), 'head\nbase\ncontext\nclean\ntail');
+    await t.tap(find.byTooltip('应用全部不冲突的更改'));
+    await t.pumpAndSettle();
+    expect(result(), 'head\nbase\ncontext\nchanged\ntail');
+    expect(writes, 0);
+    await t.tap(find.byTooltip('合并对方这段 → 结果'));
+    await t.pumpAndSettle();
+    const saved = 'head\nresolved by hand\ncontext\nchosen clean\ntail';
+    await t.enterText(find.byType(TextField), saved);
+    await t.tap(find.text('应用'));
+    await t.pumpAndSettle();
+    await t.tap(find.byTooltip('解决冲突'));
+    await t.pumpAndSettle();
+    expect(result(), saved, reason: 'reopening must preserve an explicit resolution');
+    expect(writes, 0);
+  });
+
   testWidgets('selection stays local and leaves active preview intact', (t) async {
     String? prepared;
     var writes = 0;
@@ -41,7 +77,7 @@ void main() {
     await t.tap(find.text('应用所选补丁'));
     await t.pumpAndSettle();
     expect(writes, 0);
-    expect(find.textContaining('1 个冲突'), findsOneWidget);
+    expect(find.text('1 个冲突待解决，解决后再应用全部所选文件。'), findsOneWidget);
     await t.tap(find.text('取消'));
     await t.pumpAndSettle();
     await t.tap(find.text('取消应用'));

@@ -9,11 +9,19 @@ use flutter_rust_bridge::frb;
 // Imported by bare name because the generated code refers to the mirrored
 // types as `crate::api::git::<Name>`.
 pub use cgit_core::{
-    BlameLine, BranchInfo, CommitInfo, CredentialTarget, FileStatus, GitCredentialInfo,
-    GraphCommit, Hunks, Identity, RemoteInfo, RepoRef, StashEntry, TodoCommit, Tracking, Workspace,
+    BlameLine, BranchInfo, CommitInfo, ConflictVersions, CredentialTarget, FileStatus,
+    GitCredentialInfo, GraphCommit, Hunks, Identity, RemoteInfo, RepoRef, StashEntry, TodoCommit,
+    Tracking, Workspace,
 };
 
 /* ---------- types crossing the FFI seam ---------- */
+
+#[frb(mirror(ConflictVersions))]
+pub struct _ConflictVersions {
+    pub base: Option<String>,
+    pub ours: Option<String>,
+    pub theirs: Option<String>,
+}
 
 #[frb(mirror(RepoRef))]
 pub struct _RepoRef {
@@ -372,6 +380,14 @@ pub fn op_action(path: String, op: String, action: String) -> Result<String, Str
 
 pub fn get_conflicts(path: String) -> Result<Vec<String>, String> {
     cgit_core::get_conflicts(path)
+}
+
+pub fn get_conflict_versions(path: String, file: String) -> Result<ConflictVersions, String> {
+    cgit_core::get_conflict_versions(path, file)
+}
+
+pub fn merge_source(path: String) -> Result<Option<String>, String> {
+    cgit_core::merge_source(path)
 }
 
 pub fn set_conflict_style(path: String, file: String, style: String) -> Result<String, String> {

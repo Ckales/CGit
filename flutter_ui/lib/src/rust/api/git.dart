@@ -222,6 +222,13 @@ Future<String> opAction(
 Future<List<String>> getConflicts({required String path}) =>
     RustLib.instance.api.crateApiGitGetConflicts(path: path);
 
+Future<ConflictVersions> getConflictVersions(
+        {required String path, required String file}) =>
+    RustLib.instance.api.crateApiGitGetConflictVersions(path: path, file: file);
+
+Future<String?> mergeSource({required String path}) =>
+    RustLib.instance.api.crateApiGitMergeSource(path: path);
+
 Future<String> setConflictStyle(
         {required String path, required String file, required String style}) =>
     RustLib.instance.api
@@ -463,6 +470,30 @@ class CommitInfo {
           author == other.author &&
           time == other.time &&
           refs == other.refs;
+}
+
+class ConflictVersions {
+  final String? base;
+  final String? ours;
+  final String? theirs;
+
+  const ConflictVersions({
+    this.base,
+    this.ours,
+    this.theirs,
+  });
+
+  @override
+  int get hashCode => base.hashCode ^ ours.hashCode ^ theirs.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ConflictVersions &&
+          runtimeType == other.runtimeType &&
+          base == other.base &&
+          ours == other.ours &&
+          theirs == other.theirs;
 }
 
 class FileStatus {

@@ -7,6 +7,35 @@ import 'package:flutter_test/flutter_test.dart';
 const hunk = '@@ -1,3 +1,4 @@ fn main\n a\n-b\n+B\n+c\n d\n';
 
 void main() {
+  group('deleted line ranges', () {
+    test('maps separate deletions to compact source boundaries', () {
+      expect(
+          deletedLineRanges(
+              ['a', 'gone one', 'b', 'gone two', 'c'], ['a', 'b', 'c']),
+          [(first: 1, end: 2, sideLine: 1), (first: 3, end: 4, sideLine: 2)]);
+    });
+
+    test('keeps insertion offsets and excludes additions and replacements', () {
+      expect(deletedLineRanges(['a', 'b', 'gone', 'c'], ['new', 'a', 'b', 'c']),
+          [(first: 2, end: 3, sideLine: 3)]);
+      expect(deletedLineRanges(['old'], ['new']), isEmpty);
+      expect(deletedLineRanges([], ['new']), isEmpty);
+      expect(deletedLineRanges(['same'], ['same']), isEmpty);
+    });
+
+    test('supports leading, trailing, entire-file and empty-line deletions',
+        () {
+      expect(deletedLineRanges(['gone', 'a'], ['a']),
+          [(first: 0, end: 1, sideLine: 0)]);
+      expect(deletedLineRanges(['a', 'gone'], ['a']),
+          [(first: 1, end: 2, sideLine: 1)]);
+      expect(deletedLineRanges(['gone', 'too'], []),
+          [(first: 0, end: 2, sideLine: 0)]);
+      expect(deletedLineRanges(['a', '', 'b'], ['a', 'b']),
+          [(first: 1, end: 2, sideLine: 1)]);
+    });
+  });
+
   group('partial staging', () {
     test('selectableLines finds only the +/- lines', () {
       expect(selectableLines(hunk), [1, 2, 3]);
@@ -116,7 +145,9 @@ void main() {
       );
     });
 
-    test('leaves the opposite cell empty for unbalanced runs', () {
+    test('an extra deletion inside a modification keeps its row', () {
+      // More `-` than `+` is still a modification: the leftover stays a row so
+      // the two versions remain aligned. A pure deletion is not this case.
       final rows = pairHunkLines('@@ -1,3 +1,2 @@\n-a\n-b\n+A\n c\n')!.rows;
       expect(rows.map((r) => r.type), [RowType.mod, RowType.del, RowType.ctx]);
       expect(rows[1].right, isNull,
@@ -130,6 +161,41 @@ void main() {
           [3, 2],
         ],
       );
+      expect(deletionFragments('@@ -1,3 +1,2 @@\n-a\n-b\n+A\n c\n'), isEmpty,
+          reason: 'a leftover inside a modification is a row, not a fragment');
+    });
+
+    test('a pure deletion is a divider fragment, not a blank row', () {
+      // The screenshot case: several `-` lines and no `+` after them. Padding
+      // the new side with empty cells made that removal look like an insertion.
+      const hunk = '@@ -3,4 +3,1 @@\n keep\n-gone one\n-gone two\n tail\n';
+      final rows = pairHunkLines(hunk)!.rows;
+      expect(rows.map((r) => r.type), [RowType.ctx, RowType.ctx]);
+      expect(rows.every((r) => r.left != null && r.right != null), isTrue,
+          reason: 'neither side grows a blank for the removed lines');
+      expect(
+        rows.map((r) => [r.left?.no, r.right?.no, r.left?.text]),
+        [
+          [3, 3, 'keep'],
+          [6, 4, 'tail'],
+        ],
+      );
+
+      final fragments = deletionFragments(hunk);
+      expect(fragments, hasLength(1));
+      expect(fragments.single.before, 1, reason: 'after the kept line');
+      expect(fragments.single.lines, 2);
+      expect(fragments.single.picks, [1, 2],
+          reason: 'clicking the fragment stages both removed lines');
+    });
+
+    test('a deletion at the end of the hunk still has a fragment', () {
+      const hunk = '@@ -1,2 +1,1 @@\n keep\n-gone\n';
+      expect(pairHunkLines(hunk)!.rows, hasLength(1));
+      final fragment = deletionFragments(hunk).single;
+      expect(fragment.before, 1);
+      expect(fragment.lines, 1);
+      expect(fragment.picks, [1]);
     });
 
     test('carries the body indices that staging needs', () {

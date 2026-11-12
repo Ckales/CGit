@@ -44,6 +44,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   CommitInfo dco_decode_commit_info(dynamic raw);
 
   @protected
+  ConflictVersions dco_decode_conflict_versions(dynamic raw);
+
+  @protected
   FileStatus dco_decode_file_status(dynamic raw);
 
   @protected
@@ -151,6 +154,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   CommitInfo sse_decode_commit_info(SseDeserializer deserializer);
+
+  @protected
+  ConflictVersions sse_decode_conflict_versions(SseDeserializer deserializer);
 
   @protected
   FileStatus sse_decode_file_status(SseDeserializer deserializer);
@@ -265,6 +271,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_commit_info(CommitInfo self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_conflict_versions(
+      ConflictVersions self, SseSerializer serializer);
 
   @protected
   void sse_encode_file_status(FileStatus self, SseSerializer serializer);

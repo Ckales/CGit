@@ -16,6 +16,7 @@ export 'src/rust/api/git.dart'
         BlameLine,
         BranchInfo,
         CommitInfo,
+        ConflictVersions,
         FileStatus,
         GitCredentialInfo,
         GraphCommit,
@@ -526,6 +527,27 @@ class Git {
   /// Null means the worktree entry was deleted, rather than an empty file.
   Future<String?> readConflictFile(String file) =>
       _guard(() => rust.readConflictWorktree(path: repo, file: file));
+
+  /// The three index stages of a conflicted path, or null when they cannot be
+  /// read as text (binary, or a missing stage). The merge window falls back to
+  /// the worktree markers in that case.
+  Future<ConflictVersions?> conflictVersions(String file) async {
+    try {
+      return await rust.getConflictVersions(path: repo, file: file);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// The branch named by the merge in progress, for the merge window's header.
+  /// Null during rebase/cherry-pick or when the repo is not merging.
+  Future<String?> mergeSource() async {
+    try {
+      return await rust.mergeSource(path: repo);
+    } catch (_) {
+      return null;
+    }
+  }
 
   /// Keep a missing conflict deleted, only after the user's confirmation.
   Future<void> resolveDeletedConflict(String file) =>

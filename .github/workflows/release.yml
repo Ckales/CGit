@@ -43,6 +43,7 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+          flutter-version: '3.47.7'
           cache: true
       - name: Flutter 检查
         working-directory: flutter_ui
@@ -126,6 +127,7 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+          flutter-version: '3.47.7'
           cache: true
       - name: Flutter 检查
         working-directory: flutter_ui

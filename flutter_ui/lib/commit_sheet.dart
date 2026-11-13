@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -276,7 +278,7 @@ class _CommitSheetState extends State<CommitSheet> {
       if (mounted) _message.text = text.trim();
     } on GitError catch (e) {
       if (mounted) {
-        setState(() => _error = (summary: '生成提交说明失败', detail: e.message));
+        _fail('生成提交说明失败', e.message);
       }
     } finally {
       if (mounted) setState(() => _generating = false);
@@ -301,7 +303,7 @@ class _CommitSheetState extends State<CommitSheet> {
       );
     } on GitError catch (e) {
       if (mounted) {
-        setState(() => _error = (summary: '读取历史提交说明失败', detail: e.message));
+        _fail('读取历史提交说明失败', e.message);
       }
     }
   }
@@ -370,7 +372,7 @@ class _CommitSheetState extends State<CommitSheet> {
       await widget.onChanged();
     } on GitError catch (e) {
       if (mounted) {
-        setState(() => _error = (summary: '操作失败', detail: e.message));
+        _fail('操作失败', e.message);
       }
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -431,10 +433,7 @@ class _CommitSheetState extends State<CommitSheet> {
       final summary = committed.isEmpty
           ? '提交失败（${failures.length} 个仓库）'
           : '已提交 ${committed.length} 个仓库，${failures.length} 个仓库提交失败';
-      setState(() => _error = (
-            summary: summary,
-            detail: '$summary\n\n${failures.join('\n\n')}',
-          ));
+      _fail(summary, '$summary\n\n${failures.join('\n\n')}');
       return;
     }
     _message.clear();
@@ -444,49 +443,59 @@ class _CommitSheetState extends State<CommitSheet> {
     if (push) await widget.onCommitAndPush(committed);
   }
 
+  void _fail(String summary, String detail) {
+    final error = (summary: summary, detail: detail);
+    setState(() => _error = error);
+    unawaited(_showErrorDetail(error));
+  }
+
   /// 完整错误日志在独立滚动区域展示，避免挤占文件树和提交输入。
-  Future<void> _showErrorDetail() async {
-    final error = _error!;
+  Future<void> _showErrorDetail(
+      [({String summary, String? detail})? failure]) async {
+    final error = failure ?? _error;
+    if (error == null || error.detail == null) return;
     final detail = error.detail!;
     final p = Theming.of(context);
     final scroll = ScrollController();
     try {
-      await showAppDialog<void>(
-        context,
-        title: error.summary,
-        badge: DialogBadge.danger,
-        maxWidth: 720,
-        body: SizedBox(
-          height: MediaQuery.sizeOf(context).height * 0.55,
-          child: Scrollbar(
-            controller: scroll,
-            thumbVisibility: true,
-            child: SingleChildScrollView(
-              controller: scroll,
-              child: SelectableText(detail,
-                  style: mono.copyWith(color: p.text, fontSize: 11)),
-            ),
-          ),
-        ),
-        actions: [
-          Builder(
-            builder: (context) => DialogButton(
-              '复制日志',
-              onTap: () async {
-                final route = ModalRoute.of(context)!;
-                await Clipboard.setData(ClipboardData(text: detail));
-                if (context.mounted && route.isCurrent) {
-                  Navigator.of(context).pop();
-                }
-              },
-            ),
-          ),
-          DialogButton('关闭',
-              kind: DialogButtonKind.primary,
-              autofocus: true,
-              onTap: () => Navigator.of(context).pop()),
-        ],
-      );
+      await queueErrorDialog(
+          context,
+          () => showAppDialog<void>(
+                context,
+                title: error.summary,
+                badge: DialogBadge.danger,
+                maxWidth: 720,
+                body: SizedBox(
+                  height: MediaQuery.sizeOf(context).height * 0.55,
+                  child: Scrollbar(
+                    controller: scroll,
+                    thumbVisibility: true,
+                    child: SingleChildScrollView(
+                      controller: scroll,
+                      child: SelectableText(detail,
+                          style: mono.copyWith(color: p.text, fontSize: 11)),
+                    ),
+                  ),
+                ),
+                actions: [
+                  Builder(
+                    builder: (context) => DialogButton(
+                      '复制日志',
+                      onTap: () async {
+                        final route = ModalRoute.of(context)!;
+                        await Clipboard.setData(ClipboardData(text: detail));
+                        if (context.mounted && route.isCurrent) {
+                          Navigator.of(context).pop();
+                        }
+                      },
+                    ),
+                  ),
+                  DialogButton('关闭',
+                      kind: DialogButtonKind.primary,
+                      autofocus: true,
+                      onTap: () => Navigator.of(context).pop()),
+                ],
+              ));
     } finally {
       scroll.dispose();
     }

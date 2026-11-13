@@ -1,6 +1,31 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import 'theme.dart';
+
+/// Serialize error dialogs per window, preserving each caller's error snapshot.
+final _errorDialogs = Expando<Future<void>>();
+
+Future<void> queueErrorDialog(
+    BuildContext context, Future<void> Function() show) async {
+  if (!context.mounted) return;
+  final navigator = Navigator.of(context);
+  final previous = _errorDialogs[navigator];
+  final done = Completer<void>();
+  _errorDialogs[navigator] = done.future;
+  try {
+    if (previous != null) await previous;
+    // An error can arrive while another route is finishing its build.
+    await WidgetsBinding.instance.endOfFrame;
+    if (context.mounted) await show();
+  } finally {
+    if (identical(_errorDialogs[navigator], done.future)) {
+      _errorDialogs[navigator] = null;
+    }
+    done.complete();
+  }
+}
 
 /// The round badge beside a dialog title.
 enum DialogBadge { info, danger }

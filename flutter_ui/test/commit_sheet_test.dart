@@ -304,6 +304,9 @@ void main() {
     await tester.tap(find.text('提交').last);
     await tester.pumpAndSettle();
     expect(closed, isFalse);
+    expect(find.byType(Dialog), findsOneWidget);
+    await tester.tap(find.text('关闭'));
+    await tester.pumpAndSettle();
     expect(find.byTooltip('取消勾选'), findsOneWidget);
     expect(find.byTooltip('勾选提交'), findsOneWidget);
     await tester.tap(find.text('提交').last);
@@ -700,6 +703,11 @@ void main() {
 
       expect(log, ['/w/admin:commit:feat: z', '/w/front:commit:feat: z']);
       expect(closed, isFalse);
+      expect(find.byType(Dialog), findsOneWidget);
+      expect(
+          find.textContaining('admin：pre-commit hook failed'), findsOneWidget);
+      await tester.tap(find.text('关闭'));
+      await tester.pumpAndSettle();
       expect(find.textContaining('已提交 1 个仓库'), findsOneWidget);
       await tester.tap(find.text('查看详情'));
       await tester.pumpAndSettle();
@@ -720,6 +728,10 @@ void main() {
 
         expect(tester.takeException(), isNull);
         expect(closed, isFalse);
+        expect(find.byType(Dialog), findsOneWidget);
+        expect(find.textContaining(output), findsOneWidget);
+        await tester.tap(find.text('关闭'));
+        await tester.pumpAndSettle();
         expect(find.textContaining(output), findsNothing);
         expect(find.text('已提交 1 个仓库，1 个仓库提交失败'), findsOneWidget);
         expect(tester.getSize(find.byType(ListView).first).height,

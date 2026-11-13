@@ -195,8 +195,7 @@ class _RepoScreenState extends State<RepoScreen> {
   String _branch = '';
   String _statusText = '就绪';
 
-  /// Set while the status bar shows a failure: the full text behind the one
-  /// line, opened by clicking it.
+  /// Last failure details, retained so they can be reopened after dismissal.
   String? _statusDetail;
 
   /// Every status write goes through here, so a later success clears the red
@@ -208,8 +207,7 @@ class _RepoScreenState extends State<RepoScreen> {
     OpLog.info(v);
   }
 
-  /// A failure: one line in the status bar, the whole text a click away. git's
-  /// stderr is several lines and the reason is rarely the first.
+  /// Record the failure and automatically show the complete error output.
   void _fail(String detail, {String? summary}) {
     final line = summary ?? errorSummary(detail);
     OpLog.error(line);
@@ -217,6 +215,7 @@ class _RepoScreenState extends State<RepoScreen> {
       _statusText = line;
       _statusDetail = detail.trim();
     });
+    unawaited(_showStatusDetail(detail.trim()));
   }
 
   List<BranchInfo> _branches = const [];
@@ -315,10 +314,11 @@ class _RepoScreenState extends State<RepoScreen> {
   List<CommitInfo>? _searchResults;
   int _searchGeneration = 0;
 
-  /// One network call at a time: they all touch the same refs, and a fetch
-  /// racing a push produces failures that are nobody's fault.
+  /// User network actions stay serial. Background fetches only block actions
+  /// that touch the same repository, never the whole workspace.
   bool _netBusy = false;
   Future<void>? _networkDone;
+  final _backgroundFetches = <String, Future<String>>{};
   int _workspaceOpen = 0;
 
   /// The file open in the merge window, its worktree text, and — when the
@@ -513,34 +513,30 @@ class _RepoScreenState extends State<RepoScreen> {
       await _networkDone;
     }
     if (!mounted || opened != _workspaceOpen) return;
-    final done = Completer<void>();
-    _networkDone = done.future;
-    setState(() => _netBusy = true);
-    try {
-      final authFailed = <String>[];
-      await Future.wait(repos.map((repo) async {
-        try {
-          await Git(repo.path).fetch();
-        } on GitError catch (e) {
-          if (isAuthFailure(e.message)) authFailed.add(repo.name);
+    final authFailed = <String>[];
+    await Future.wait(repos.map((repo) async {
+      final fetch = _backgroundFetches[repo.path] ?? Git(repo.path).fetch();
+      _backgroundFetches[repo.path] = fetch;
+      try {
+        await fetch;
+      } on GitError catch (e) {
+        if (isAuthFailure(e.message)) authFailed.add(repo.name);
+      } finally {
+        if (identical(_backgroundFetches[repo.path], fetch)) {
+          _backgroundFetches.remove(repo.path);
         }
-      }));
-      if (!mounted || opened != _workspaceOpen) return;
-      final tracking = await _readRepoTracking();
-      if (!mounted || opened != _workspaceOpen) return;
-      setState(() {
-        _repoTracking = tracking;
-        _tracking = tracking[_repoPath];
-      });
-      if (authFailed.isNotEmpty) {
-        final message =
-            '${authFailed.join('、')} 远程认证失败，请到设置 → Git 信息 → 远程认证检查凭据';
-        _fail(message, summary: message);
       }
-    } finally {
-      _networkDone = null;
-      done.complete();
-      if (mounted) setState(() => _netBusy = false);
+    }));
+    if (!mounted || opened != _workspaceOpen) return;
+    final tracking = await _readRepoTracking();
+    if (!mounted || opened != _workspaceOpen) return;
+    setState(() {
+      _repoTracking = tracking;
+      _tracking = tracking[_repoPath];
+    });
+    if (authFailed.isNotEmpty) {
+      final message = '${authFailed.join('、')} 远程认证失败，请到设置 → Git 信息 → 远程认证检查凭据';
+      _fail(message, summary: message);
     }
   }
 
@@ -590,9 +586,10 @@ class _RepoScreenState extends State<RepoScreen> {
   /// Only the active repo is watched, so a sibling's status is as fresh as the
   /// last refresh.
   Future<void> _refreshRepoChanges() async {
+    final opened = _workspaceOpen;
     final results =
         await Future.wait([_readRepoChanges(), _readRepoTracking()]);
-    if (!mounted) return;
+    if (!mounted || opened != _workspaceOpen) return;
     setState(() {
       _repoChanges = results[0] as Map<String, List<FileStatus>>;
       _repoTracking = results[1] as Map<String, Tracking>;
@@ -672,9 +669,8 @@ class _RepoScreenState extends State<RepoScreen> {
               : r,
       ];
 
-  /// Right-click on a 仓库 row: that repo's
-  /// local and remote branches, a click checks one out there. The selected
-  /// repo stays as it is.
+  /// Repository actions and branch switching target the right-clicked row,
+  /// keeping the selected repository unchanged.
   Future<void> _showRepoBranchMenu(RepoRef repo, Offset position) async {
     final git = Git(repo.path);
     final List<BranchInfo> locals;
@@ -687,10 +683,29 @@ class _RepoScreenState extends State<RepoScreen> {
       return;
     }
     if (!mounted) return;
+    final branch = locals.where((b) => b.isCurrent).firstOrNull?.name ?? '';
+    final base = branch.isEmpty ? 'HEAD' : branch;
     await showRepoMenu(
       context: context,
       position: position,
+      searchHint: '搜索分支和操作',
       items: [
+        MenuAction("从 '$base' 新建分支…", () => _newBranch(base: base, repo: repo)),
+        MenuAction(
+            '更新',
+            () => _network(
+                  '更新 ${repo.name}',
+                  (git) =>
+                      branch.isEmpty ? git.pull() : git.updateBranch(branch),
+                  target: git,
+                )),
+        MenuAction(
+            '推送',
+            () => _network(
+                  '推送 ${repo.name}',
+                  (git) => branch.isEmpty ? git.push() : git.pushBranch(branch),
+                  target: git,
+                )),
         MenuAction.header('${repo.name} · 本地分支'),
         for (final b in locals)
           MenuAction(
@@ -719,23 +734,26 @@ class _RepoScreenState extends State<RepoScreen> {
     String label,
     Future<void> Function() action,
   ) async {
-    final active = repo.path == _repoPath;
     try {
       await action();
-      if (active) {
+      if (!mounted || !_workspaceRepos.any((r) => r.path == repo.path)) return;
+      if (repo.path == _repoPath) {
         await _refresh();
       } else {
         final branch = await Git(repo.path).currentBranch();
-        if (!mounted) return;
+        if (!mounted || !_workspaceRepos.any((r) => r.path == repo.path)) {
+          return;
+        }
         setState(() => _workspaceRepos = _withRepoBranch(repo.path, branch));
+        await _refreshRepoChanges();
       }
     } on GitError catch (e) {
       if (mounted) _fail(e.message);
       return;
     }
     if (!mounted) return;
-    setState(
-        () => _status = active ? '已切换到 $label' : '${repo.name} 已切换到 $label');
+    setState(() => _status =
+        repo.path == _repoPath ? '已切换到 $label' : '${repo.name} 已切换到 $label');
   }
 
   /// Watch the open repo so changes made outside this app — a commit from the
@@ -1104,9 +1122,9 @@ class _RepoScreenState extends State<RepoScreen> {
       await _stashAction('打标签 $name', () => _git!.createTag(name, oid: oid));
       return;
     }
-    await _network('打标签并推送 $name', () async {
-      await _git!.createTag(name, oid: oid);
-      return _git!.pushTag(name);
+    await _network('打标签并推送 $name', (git) async {
+      await git.createTag(name, oid: oid);
+      return git.pushTag(name);
     });
   }
 
@@ -1157,9 +1175,9 @@ class _RepoScreenState extends State<RepoScreen> {
           BranchCommand.mergeInto =>
             _stashAction('合并 ${b.name}', () => _git!.mergeBranch(b.name)),
           BranchCommand.update =>
-            _network('更新 ${b.name}', () => _git!.updateBranch(b.name)),
+            _network('更新 ${b.name}', (git) => git.updateBranch(b.name)),
           BranchCommand.push =>
-            _network('推送 ${b.name}', () => _git!.pushBranch(b.name)),
+            _network('推送 ${b.name}', (git) => git.pushBranch(b.name)),
           BranchCommand.applyPatchFromFile => _applyPatchFromFile(),
           BranchCommand.applyPatchFromClipboard =>
             _applyPatchFrom(() => _git!.readClipboard(), '剪贴板'),
@@ -1200,17 +1218,24 @@ class _RepoScreenState extends State<RepoScreen> {
     );
   }
 
-  Future<void> _newBranch({String? base}) async {
+  Future<void> _newBranch({String? base, RepoRef? repo}) async {
+    final git = repo == null ? _git : Git(repo.path);
+    if (git == null) return;
     final name = await promptText(
       context,
       title: base == null ? '新建分支' : "从 '$base' 新建分支",
       hint: '分支名',
       confirmLabel: '创建并检出',
     );
-    if (name == null || name.trim().isEmpty) return;
+    if (name == null || name.trim().isEmpty || !mounted) return;
+    if (repo != null) {
+      await _checkoutInRepo(
+          repo, name.trim(), () => git.createBranch(name.trim(), base: base));
+      return;
+    }
     await _branchAction(
       '已创建并检出 ${name.trim()}',
-      () => _git!.createBranch(name.trim(), base: base),
+      () => git.createBranch(name.trim(), base: base),
       followHead: true,
     );
   }
@@ -1562,22 +1587,44 @@ class _RepoScreenState extends State<RepoScreen> {
   /// Runs one network action at a time, reporting through the status bar and
   /// refreshing afterwards either way — a fetch that fails halfway still moved
   /// some refs, and a pull that stops on conflict has already written files.
-  Future<void> _network(String label, Future<String> Function() action) async {
-    if (_netBusy) return;
+  Future<void> _network(
+    String label,
+    Future<String> Function(Git git) action, {
+    List<String>? paths,
+    Git? target,
+  }) async {
+    final git = target ?? _git;
+    if (_netBusy || git == null) return;
+    Future<void> refresh() =>
+        git.repo == _repoPath ? _refresh() : _refreshRepoChanges();
+    // Capture targets before waiting: sidebar selection may change meanwhile.
+    final pending = [
+      for (final path in paths ?? [git.repo])
+        if (_backgroundFetches[path] case final fetch?) fetch,
+    ];
     final done = Completer<void>();
     _networkDone = done.future;
     setState(() {
       _netBusy = true;
-      _status = '$label…';
+      _status = pending.isEmpty ? '$label…' : '$label…等待当前仓库抓取完成';
     });
     try {
-      final out = await action();
-      await _refresh();
+      await Future.wait(pending.map((fetch) async {
+        try {
+          await fetch;
+        } on GitError {
+          // A failed automatic fetch must not discard the explicit request.
+        }
+      }));
+      if (!mounted) return;
+      setState(() => _status = '$label…');
+      final out = await action(git);
+      await refresh();
       if (!mounted) return;
       final last = out.split('\n').where((l) => l.trim().isNotEmpty).lastOrNull;
       setState(() => _status = last == null ? '$label完成' : '$label完成。$last');
     } on GitError catch (e) {
-      await _refresh();
+      await refresh();
       if (mounted) {
         final hint = networkErrorHint(e.message);
         _fail(hint == null ? e.message : '$hint\n\n${e.message.trim()}',
@@ -1590,30 +1637,31 @@ class _RepoScreenState extends State<RepoScreen> {
     }
   }
 
-  Future<void> _fetch() => _network('抓取', () => _git!.fetch());
+  Future<void> _fetch() => _network('抓取', (git) => git.fetch());
 
   /// Pull the sidebar's workspace in order. Keep the targets fixed even if
   /// the user switches repos, and let one failure leave the others runnable.
-  Future<void> _pull() => _network('拉取', () async {
-        final repos = List<RepoRef>.of(_workspaceRepos);
-        final failures = <String>[];
-        var last = '';
-        for (final (i, repo) in repos.indexed) {
-          if (mounted && repos.length > 1) {
-            setState(() =>
-                _status = '正在拉取 ${repo.name}（${i + 1}/${repos.length}）…');
-          }
-          try {
-            last = await Git(repo.path).pull();
-          } on GitError catch (e) {
-            failures.add(repos.length > 1
-                ? '${repo.name}：${e.message}'
-                : e.message);
-          }
+  Future<void> _pull() {
+    final repos = List<RepoRef>.of(_workspaceRepos);
+    return _network('拉取', (_) async {
+      final failures = <String>[];
+      var last = '';
+      for (final (i, repo) in repos.indexed) {
+        if (mounted && repos.length > 1) {
+          setState(
+              () => _status = '正在拉取 ${repo.name}（${i + 1}/${repos.length}）…');
         }
-        if (failures.isNotEmpty) throw GitError(failures.join('；'));
-        return repos.length > 1 ? '已拉取 ${repos.length} 个仓库' : last;
-      });
+        try {
+          last = await Git(repo.path).pull();
+        } on GitError catch (e) {
+          failures
+              .add(repos.length > 1 ? '${repo.name}：${e.message}' : e.message);
+        }
+      }
+      if (failures.isNotEmpty) throw GitError(failures.join('；'));
+      return repos.length > 1 ? '已拉取 ${repos.length} 个仓库' : last;
+    }, paths: [for (final repo in repos) repo.path]);
+  }
 
   /// One repo needs no dialog — there is nothing to choose. A workspace opens
   /// the push dialog with the repos that have commits pre-checked.
@@ -1666,7 +1714,7 @@ class _RepoScreenState extends State<RepoScreen> {
 
   /// Push each repo in turn after a commit that reached several. One refusing
   /// does not stop the rest; the failures come back together.
-  Future<void> _pushRepos(List<String> paths) => _network('推送', () async {
+  Future<void> _pushRepos(List<String> paths) => _network('推送', (_) async {
         var last = '';
         final failures = <String>[];
         for (final path in paths) {
@@ -1686,13 +1734,13 @@ class _RepoScreenState extends State<RepoScreen> {
         }
         if (failures.isNotEmpty) throw GitError(failures.join('；'));
         return last;
-      });
+      }, paths: paths);
 
   /// Right-click on 推送. `--force-with-lease`, so it still refuses to clobber
   /// commits this repo has never seen — but it rewrites the remote branch, so
   /// it is behind a right-click and marked dangerous rather than sitting next
   /// to the ordinary push.
-  Future<void> _pushForce() => _network('强制推送', () => _git!.pushForce());
+  Future<void> _pushForce() => _network('强制推送', (git) => git.pushForce());
 
   /// Only asked when git config says nothing about `pull.rebase`. Cancelling
   /// aborts the push retry rather than picking a default — rebasing someone's
@@ -2128,8 +2176,7 @@ class _RepoScreenState extends State<RepoScreen> {
                     enabled: _git != null,
                     tooltip: '提交 (⌘↵)',
                     onTap: _openCommitDialog),
-                // Disabled while any network action runs: they all move the same refs,
-                // and a fetch racing a push fails in ways that are nobody's fault.
+                // User actions stay serial; automatic fetches leave these enabled.
                 _ToolButton(
                   label: '推送',
                   enabled: _git != null && !_netBusy,
@@ -2394,7 +2441,7 @@ class _RepoScreenState extends State<RepoScreen> {
             ContextMenuRegion(
               items: () => [
                 MenuAction('推送标签到远端',
-                    () => _network('推送标签 $tag', () => _git!.pushTag(tag))),
+                    () => _network('推送标签 $tag', (git) => git.pushTag(tag))),
                 MenuAction(
                   '删除本地标签',
                   () => _stashAction(
@@ -3025,31 +3072,42 @@ class _RepoScreenState extends State<RepoScreen> {
     );
   }
 
-  Future<void> _showStatusDetail() {
-    final detail = _statusDetail!;
-    return showAppDialog<void>(
-      context,
-      title: '操作失败',
-      badge: DialogBadge.danger,
-      maxWidth: 640,
-      body: SelectableText(
-        detail,
-        style: ui.copyWith(
-            color: Theming.of(context).textDim, fontSize: 12, height: 1.5),
-      ),
-      actions: [
-        DialogButton('复制', onTap: () {
-          Clipboard.setData(ClipboardData(text: detail));
-          Navigator.of(context).pop();
-        }),
-        DialogButton(
-          '确定',
-          kind: DialogButtonKind.primary,
-          autofocus: true,
-          onTap: () => Navigator.of(context).pop(),
-        ),
-      ],
-    );
+  Future<void> _showStatusDetail([String? failure]) {
+    final detail = failure ?? _statusDetail;
+    if (detail == null) return Future<void>.value();
+    return queueErrorDialog(
+        context,
+        () => showAppDialog<void>(
+              context,
+              title: '操作失败',
+              badge: DialogBadge.danger,
+              maxWidth: 640,
+              body: ConstrainedBox(
+                constraints: BoxConstraints(
+                    maxHeight: MediaQuery.sizeOf(context).height * 0.55),
+                child: SingleChildScrollView(
+                  child: SelectableText(
+                    detail,
+                    style: ui.copyWith(
+                        color: Theming.of(context).textDim,
+                        fontSize: 12,
+                        height: 1.5),
+                  ),
+                ),
+              ),
+              actions: [
+                DialogButton('复制', onTap: () {
+                  Clipboard.setData(ClipboardData(text: detail));
+                  Navigator.of(context).pop();
+                }),
+                DialogButton(
+                  '确定',
+                  kind: DialogButtonKind.primary,
+                  autofocus: true,
+                  onTap: () => Navigator.of(context).pop(),
+                ),
+              ],
+            ));
   }
 }
 

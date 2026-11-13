@@ -101,6 +101,7 @@ Future<void> showRepoMenu({
   required List<MenuAction> items,
   bool alignRight = false,
   double minWidth = 140,
+  String? searchHint,
 }) async {
   final p = Theming.of(context);
   // Passed down by hand: the menu is a new route, and Theming isn't an
@@ -108,36 +109,91 @@ Future<void> showRepoMenu({
   final navigator = Navigator.of(context);
   final overlay = navigator.overlay!.context.findRenderObject() as RenderBox;
   final remaining = [...items];
+  var query = '';
 
   final picked = await navigator.push(_MenuRoute(
     anchor: overlay.globalToLocal(position),
     alignRight: alignRight,
+    keepPosition: searchHint != null,
     palette: p,
-    minWidth: minWidth,
+    minWidth: searchHint == null ? minWidth : max(minWidth, 260),
     child: StatefulBuilder(builder: (context, setState) {
-      // Only menus with a checked entry need the tick column.
-      final hasChecks = remaining.any((item) => item.checked);
+      final filtered = remaining
+          .where((item) =>
+              item.header ||
+              item.label.toLowerCase().contains(query) ||
+              item.sublabel.toLowerCase().contains(query))
+          .toList();
+      final visible = [
+        for (final (i, item) in filtered.indexed)
+          // Hide group headers when none of their entries remain.
+          if (!item.header ||
+              (i + 1 < filtered.length && !filtered[i + 1].header))
+            item,
+      ];
+      final hasChecks = visible.any((item) => item.checked);
       return Column(
+        mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          for (final (i, item) in remaining.indexed)
-            // 移除分组的最后一项时，一并隐藏空标题。
-            if (!item.header ||
-                (i + 1 < remaining.length && !remaining[i + 1].header))
-              item.header
-                  ? _MenuHeader(item.label, palette: p, first: i == 0)
-                  : _MenuRow(
-                      item,
-                      palette: p,
-                      hasChecks: hasChecks,
-                      onRemove: item.onRemove == null
-                          ? null
-                          : () async {
-                              await item.onRemove!();
-                              if (!context.mounted) return;
-                              setState(() => remaining.remove(item));
-                            },
+          if (searchHint != null)
+            Container(
+              margin: const EdgeInsets.only(bottom: 4),
+              decoration: BoxDecoration(
+                border: Border(bottom: BorderSide(color: p.border)),
+              ),
+              child: SizedBox(
+                width: 260,
+                child: TextField(
+                  autofocus: true,
+                  style: ui.copyWith(color: p.text),
+                  decoration: InputDecoration(
+                    hintText: searchHint,
+                    hintStyle: ui.copyWith(color: p.textDim),
+                    isDense: true,
+                    border: InputBorder.none,
+                    contentPadding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 9),
+                    prefixIcon: Icon(Icons.search, size: 15, color: p.textDim),
+                    prefixIconConstraints: const BoxConstraints(minWidth: 28),
+                  ),
+                  onChanged: (value) =>
+                      setState(() => query = value.trim().toLowerCase()),
+                ),
+              ),
+            ),
+          Flexible(
+            child: SingleChildScrollView(
+              key: ValueKey(query),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (visible.isEmpty && searchHint != null)
+                    Padding(
+                      padding: const EdgeInsets.all(10),
+                      child:
+                          Text('无匹配结果', style: ui.copyWith(color: p.textDim)),
                     ),
+                  for (final (i, item) in visible.indexed)
+                    item.header
+                        ? _MenuHeader(item.label, palette: p, first: i == 0)
+                        : _MenuRow(
+                            item,
+                            palette: p,
+                            hasChecks: hasChecks,
+                            onRemove: item.onRemove == null
+                                ? null
+                                : () async {
+                                    await item.onRemove!();
+                                    if (!context.mounted) return;
+                                    setState(() => remaining.remove(item));
+                                  },
+                          ),
+                ],
+              ),
+            ),
+          ),
         ],
       );
     }),
@@ -150,6 +206,7 @@ class _MenuRoute extends PopupRoute<MenuAction> {
   _MenuRoute({
     required this.anchor,
     required this.alignRight,
+    required this.keepPosition,
     required this.palette,
     required this.minWidth,
     required this.child,
@@ -157,6 +214,9 @@ class _MenuRoute extends PopupRoute<MenuAction> {
 
   final Offset anchor;
   final bool alignRight;
+  final bool keepPosition;
+  late final _layout =
+      _MenuLayout(anchor, alignRight, keepPosition: keepPosition);
   final Palette palette;
 
   /// Menus opened from a small button pass a smaller value so the popup hugs
@@ -182,7 +242,7 @@ class _MenuRoute extends PopupRoute<MenuAction> {
     final p = palette;
     return _CloseWhenUnfocused(
       child: CustomSingleChildLayout(
-        delegate: _MenuLayout(anchor, alignRight),
+        delegate: _layout,
         child: FadeTransition(
           opacity: animation,
           child: Material(
@@ -195,10 +255,9 @@ class _MenuRoute extends PopupRoute<MenuAction> {
               borderRadius: BorderRadius.circular(6),
             ),
             child: ConstrainedBox(
-              constraints:
-                  BoxConstraints(minWidth: minWidth, maxWidth: 420),
+              constraints: BoxConstraints(minWidth: minWidth, maxWidth: 420),
               child: IntrinsicWidth(
-                child: SingleChildScrollView(
+                child: Padding(
                   padding: const EdgeInsets.all(4),
                   child: child,
                 ),
@@ -271,10 +330,12 @@ class _CloseWhenUnfocusedState extends State<_CloseWhenUnfocused>
 /// it when the menu fits, else above it. Either way kept 8px inside the
 /// window, which slides a menu opened near an edge back in.
 class _MenuLayout extends SingleChildLayoutDelegate {
-  _MenuLayout(this.anchor, this.alignRight);
+  _MenuLayout(this.anchor, this.alignRight, {this.keepPosition = false});
 
   final Offset anchor;
   final bool alignRight;
+  final bool keepPosition;
+  Offset? _initialPosition;
 
   static const _margin = 8.0;
 
@@ -290,10 +351,18 @@ class _MenuLayout extends SingleChildLayoutDelegate {
         : anchor.dx - childSize.width / 2;
     final fitsBelow = anchor.dy + childSize.height <= size.height - _margin;
     final y = fitsBelow ? anchor.dy : anchor.dy - childSize.height;
-    return Offset(
-      x.clamp(_margin, max(_margin, size.width - childSize.width - _margin)),
-      y.clamp(_margin, max(_margin, size.height - childSize.height - _margin)),
+    // Filtering shrinks a searchable menu; keep its input under the pointer.
+    final desired = keepPosition && _initialPosition != null
+        ? _initialPosition!
+        : Offset(x, y);
+    final position = Offset(
+      desired.dx
+          .clamp(_margin, max(_margin, size.width - childSize.width - _margin)),
+      desired.dy.clamp(
+          _margin, max(_margin, size.height - childSize.height - _margin)),
     );
+    if (keepPosition) _initialPosition ??= position;
+    return position;
   }
 
   @override

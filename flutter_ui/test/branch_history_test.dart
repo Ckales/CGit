@@ -235,6 +235,13 @@ void main() {
     api.checkoutFailure = 'local changes prevent checkout';
     await tester.tap(find.text('feature'));
     await tester.pumpAndSettle();
+    expect(find.text('操作失败'), findsOneWidget);
+    final details = find.descendant(
+        of: find.byType(Dialog), matching: find.byType(SelectableText));
+    expect(tester.widget<SelectableText>(details).data,
+        'local changes prevent checkout');
+    await tester.tap(find.text('确定'));
+    await tester.pumpAndSettle();
     expect(api.currentBranch, 'main');
     expect(find.text('main history'), findsOneWidget);
     expect(find.text('feature history'), findsNothing);

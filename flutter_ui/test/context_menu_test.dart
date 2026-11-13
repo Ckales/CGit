@@ -141,4 +141,89 @@ void main() {
     expect(opened, isEmpty);
     await mouse.removePointer();
   });
+  Future<void> openSearch(WidgetTester tester, {bool long = false}) async {
+    await tester.pumpWidget(MaterialApp(
+      home: Theming(
+        palette: Palette.dark,
+        child: Builder(
+            builder: (context) => TextButton(
+                  onPressed: () => showRepoMenu(
+                    context: context,
+                    position: const Offset(40, 40),
+                    searchHint: '搜索分支和操作',
+                    items: [
+                      MenuAction('更新', () {}),
+                      const MenuAction.header('本地分支'),
+                      MenuAction('main', () {}),
+                      const MenuAction.header('远端分支'),
+                      MenuAction('origin/Feature-Menu', () {}),
+                      if (long)
+                        for (var i = 0; i < 100; i++)
+                          MenuAction('origin/branch-$i', () {}),
+                    ],
+                  ),
+                  child: const Text('open'),
+                )),
+      ),
+    ));
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+  }
+
+  testWidgets(
+      'search filters branches case insensitively and hides empty groups',
+      (tester) async {
+    await openSearch(tester);
+    await tester.enterText(find.byType(TextField), '  FEATURE  ');
+    await tester.pumpAndSettle();
+    expect(find.text('origin/Feature-Menu'), findsOneWidget);
+    expect(find.text('远端分支'), findsOneWidget);
+    expect(find.text('本地分支'), findsNothing);
+    expect(find.text('main'), findsNothing);
+    expect(find.text('更新'), findsNothing);
+  });
+
+  testWidgets('search matches operations and clearing restores all items',
+      (tester) async {
+    await openSearch(tester);
+    await tester.enterText(find.byType(TextField), '更新');
+    await tester.pumpAndSettle();
+    expect(find.byWidgetPredicate((w) => w is Text && w.data == '更新'),
+        findsOneWidget);
+    expect(find.text('远端分支'), findsNothing);
+    await tester.enterText(find.byType(TextField), 'missing');
+    await tester.pumpAndSettle();
+    expect(find.text('无匹配结果'), findsOneWidget);
+    await tester.enterText(find.byType(TextField), '');
+    await tester.pumpAndSettle();
+    expect(find.text('无匹配结果'), findsNothing);
+    expect(find.text('main'), findsOneWidget);
+    expect(find.text('origin/Feature-Menu'), findsOneWidget);
+    await tester.tap(find.text('更新'));
+    await tester.pumpAndSettle();
+    expect(find.byType(TextField), findsNothing);
+  });
+
+  testWidgets('Escape dismisses a searchable menu while editing',
+      (tester) async {
+    await openSearch(tester);
+    await tester.enterText(find.byType(TextField), 'main');
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    expect(find.byType(TextField), findsNothing);
+  });
+  testWidgets('search stays visible while a long branch list scrolls',
+      (tester) async {
+    await openSearch(tester, long: true);
+    final top = tester.getTopLeft(find.byType(TextField));
+    await tester.drag(
+        find.byType(SingleChildScrollView), const Offset(0, -1500));
+    await tester.pumpAndSettle();
+    expect(tester.getTopLeft(find.byType(TextField)), top);
+    await tester.enterText(find.byType(TextField), 'FEATURE');
+    await tester.pumpAndSettle();
+    expect(find.text('origin/Feature-Menu').hitTestable(), findsOneWidget);
+    expect(tester.getTopLeft(find.byType(TextField)), top);
+    expect(tester.takeException(), isNull);
+  });
 }
